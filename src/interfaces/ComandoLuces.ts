@@ -1,16 +1,17 @@
 /**
  * Acciones soportadas desde el proceso de renderizado (Frontend) hacia la consola GrandMA2.
  */
-export type TipoAccionLuz = 'encender' | 'apagar' | 'ajustar';
+export type TipoAccionLuz = 'encender' | 'apagar' | 'ajustar' | 'color';
 
 /**
  * Tipos de parámetros controlables definidos en el acuerdo de interfaz IPC.
  */
-export type TipoParametroLuz = 'intensidad';
+export type TipoParametroLuz = 'intensidad' | 'color';
 
 /**
  * Contrato de carga útil JSON enviado por el frontend mediante IPC.
- * Ejemplo: { accion: "encender", grupo: "1", valor: "50", tipo: "intensidad" }
+ * Ejemplo intensidad: { accion: "encender", grupo: "1", valor: "50", tipo: "intensidad" }
+ * Ejemplo color:      { accion: "color", grupo: "1", valor: "4.2", tipo: "color" }
  */
 export interface ComandoLuces {
   readonly accion: TipoAccionLuz;
@@ -60,14 +61,17 @@ const ACCIONES_PERMITIDAS: ReadonlySet<string> = new Set<TipoAccionLuz>([
   'encender',
   'apagar',
   'ajustar',
+  'color',
 ]);
 
 const TIPOS_PARAMETRO_PERMITIDOS: ReadonlySet<string> = new Set<TipoParametroLuz>([
   'intensidad',
+  'color',
 ]);
 
 const EXPRESION_GRUPO_MA2 = /^\d+(?:\s*(?:thru|\+|-)\s*\d+)*$/i;
 const EXPRESION_VALOR_NUMERICO = /^\d+(?:\.\d+)?$/;
+const EXPRESION_PRESET_COLOR_MA2 = /^(?:4\.)?[1-9]\d?$/;
 
 /**
  * Type Guard que verifica si un valor desconocido corresponde a un objeto plano no nulo.
@@ -121,6 +125,19 @@ function esValorIntensidadValido(valor: unknown): valor is string {
 }
 
 /**
+ * Verifica que el valor corresponda a un identificador de preset de color válido en GrandMA2
+ * (ej. "4.1".."4.99" o índice "1".."99" dentro del pool 4 de Color).
+ */
+function esValorPresetColorValido(valor: unknown): valor is string {
+  if (typeof valor !== 'string') {
+    return false;
+  }
+
+  const presetLimpio = valor.trim();
+  return EXPRESION_PRESET_COLOR_MA2.test(presetLimpio);
+}
+
+/**
  * Type Guard principal para validar en tiempo de ejecución los payloads recibidos desde ipcMain.
  */
 export function esComandoLucesValido(cargaUtil: unknown): cargaUtil is ComandoLuces {
@@ -128,10 +145,22 @@ export function esComandoLucesValido(cargaUtil: unknown): cargaUtil is ComandoLu
     return false;
   }
 
-  return (
-    esAccionLuzValida(cargaUtil['accion']) &&
-    esGrupoMA2Valido(cargaUtil['grupo']) &&
-    esValorIntensidadValido(cargaUtil['valor']) &&
-    esTipoParametroLuzValido(cargaUtil['tipo'])
-  );
+  const accion = cargaUtil['accion'];
+  const grupo = cargaUtil['grupo'];
+  const valor = cargaUtil['valor'];
+  const tipo = cargaUtil['tipo'];
+
+  if (
+    !esAccionLuzValida(accion) ||
+    !esGrupoMA2Valido(grupo) ||
+    !esTipoParametroLuzValido(tipo)
+  ) {
+    return false;
+  }
+
+  if (tipo === 'color') {
+    return esValorPresetColorValido(valor);
+  }
+
+  return esValorIntensidadValido(valor);
 }
