@@ -91,9 +91,9 @@ class ControladorPrincipalMA2 {
       show: true,
       title: 'Agente de Control de Luces - GrandMA2',
       webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true,
       },
     });
 
