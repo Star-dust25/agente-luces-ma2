@@ -17,7 +17,7 @@ export const TIPOS_PARAMETRO_PERMITIDOS: ReadonlySet<TipoParametroLuz> = new Set
 
 const CARACTERES_CONTROL_O_INYECCION = /[\r\n;\x00-\x1f]/;
 const REGEX_BLACKOUT = /\b(apagon|apagones|black[\s-]*outs?)\b/i;
-const REGEX_RANGO_TEXTO = /\bgrupos?\s+(\d+)\s*(?:al|a|hasta|thru|-)\s*(\d+)\b/i;
+const REGEX_RANGO_TEXTO = /\bgrupos?\s+(\d+)\s*(?:al|a|hasta|thru|-)\s*(\d+)(?!\s*%)\b/i;
 const REGEX_RANGO_GRUPO = /^(\d+)\s+thru\s+(\d+)$/i;
 const REGEX_GRUPO_INDIVIDUAL = /^0*([1-9]\d*)$/;
 const REGEX_VALOR_NUMERICO = /^\d+(?:\.\d+)?$/;
@@ -37,6 +37,9 @@ export function validarRangoGrupos(inicioNum: number, finNum: number): string | 
   }
   if (finNum - inicioNum + 1 > MAX_GRUPOS_EN_RANGO) {
     return `Los rangos de más de ${MAX_GRUPOS_EN_RANGO} grupos están bloqueados en modo demo.`;
+  }
+  if (inicioNum > MAX_GRUPOS_EN_RANGO || finNum > MAX_GRUPOS_EN_RANGO) {
+    return `El rango de grupos excede el catálogo configurado (grupos 1 al ${MAX_GRUPOS_EN_RANGO}).`;
   }
   return null;
 }
@@ -147,6 +150,9 @@ export function bloqueoDeSeguridad(
     const numeroGrupo = Number(coincidenciaIndividual[1]);
     if (!Number.isSafeInteger(numeroGrupo) || numeroGrupo < 1) {
       return 'El grupo indicado no es válido para la simulación.';
+    }
+    if (numeroGrupo > MAX_GRUPOS_EN_RANGO) {
+      return `El grupo indicado no pertenece al catálogo configurado (grupos 1 al ${MAX_GRUPOS_EN_RANGO}).`;
     }
   }
 

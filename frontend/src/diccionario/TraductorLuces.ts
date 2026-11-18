@@ -147,6 +147,22 @@ const PALABRAS_APAGAR = ['apagar', 'apaga', 'apagado', 'apagon', 'blackout', 'ce
 const PALABRAS_ENCENDER = ['encender', 'enciende', 'prender', 'prende', 'activar', 'activa', 'on', 'full', 'maximo'] as const;
 const PALABRAS_AJUSTAR = ['ajustar', 'ajusta', 'subir', 'sube', 'bajar', 'baja', 'poner', 'pon', 'dejar', 'cambiar', 'atenuar', 'dimmer'] as const;
 
+interface ResolucionGrupoInterna {
+  readonly exito: boolean;
+  readonly id?: string;
+  readonly nombre?: string;
+  readonly textoSinGrupo?: string;
+  readonly error?: string;
+  readonly esAmbiguo?: boolean;
+}
+
+interface ResolucionIntensidadInterna {
+  readonly exito: boolean;
+  readonly accion?: TipoAccionLuz;
+  readonly valor?: string;
+  readonly error?: string;
+}
+
 /**
  * Traductor de lenguaje natural en español a payloads tipados para GrandMA2 (RF-03 y RF-05).
  */
@@ -188,25 +204,67 @@ export class TraductorLuces {
     }
 
     const palabras = textoNormalizado.split(' ');
-    const esBlackout = palabras.some((p) => p === 'apagon' || p === 'blackout');
-    const grupoResuelto = TraductorLuces.resolverGrupo(textoNormalizado, palabras, esBlackout);
 
-    if (grupoResuelto === null) {
+    // 1. Detección de acciones contradictorias: encender y apagar a la vez
+    const tieneApagar = PALABRAS_APAGAR.some((p) => palabras.includes(p));
+    const tieneEncender = PALABRAS_ENCENDER.some((p) => palabras.includes(p));
+
+    if (tieneApagar && tieneEncender) {
       return {
         exito: false,
         textoOriginal,
         textoNormalizado,
         comandoPayload: null,
         sintaxisMA2: null,
-        etiquetaGrupo: 'No identificado',
+        etiquetaGrupo: '—',
+        etiquetaAccion: 'Contradictoria',
+        etiquetaValor: '—',
+        mensajeError: 'Orden contradictoria: no se puede encender y apagar a la vez.',
+      };
+    }
+
+    // 2. Detección de ambigüedad por múltiples colores
+    const coloresDetectados = CATALOGO_COLORES.filter((color) =>
+      color.sinonimos.some((sinonimo) => palabras.includes(sinonimo))
+    );
+
+    if (coloresDetectados.length > 1) {
+      return {
+        exito: false,
+        textoOriginal,
+        textoNormalizado,
+        comandoPayload: null,
+        sintaxisMA2: null,
+        etiquetaGrupo: '—',
+        etiquetaAccion: 'Ambigua',
+        etiquetaValor: '—',
+        mensajeError: 'Orden ambigua: se detectaron múltiples colores en la misma instrucción.',
+      };
+    }
+
+    const esBlackout = palabras.some((p) => p === 'apagon' || p === 'blackout');
+
+    // 3. Resolución y validación de grupos (ambigüedad y catálogo)
+    const grupoResuelto = TraductorLuces.resolverGrupo(textoNormalizado, palabras, esBlackout);
+
+    if (!grupoResuelto.exito || grupoResuelto.id === undefined || grupoResuelto.nombre === undefined) {
+      return {
+        exito: false,
+        textoOriginal,
+        textoNormalizado,
+        comandoPayload: null,
+        sintaxisMA2: null,
+        etiquetaGrupo: grupoResuelto.esAmbiguo ? 'Ambigua' : 'No identificado',
         etiquetaAccion: 'Pendiente',
         etiquetaValor: '—',
         mensajeError:
+          grupoResuelto.error ??
           'No se identificó el grupo o zona. Prueba indicando: frontales, contraluz, laterales, wash, móviles, público o "grupo 1".',
       };
     }
 
-    const colorResuelto = TraductorLuces.resolverColor(palabras);
+    // 4. Si se detectó un color único y no es blackout, se aplica la acción de color
+    const colorResuelto = coloresDetectados.length === 1 ? coloresDetectados[0] : null;
     if (colorResuelto !== null && !esBlackout) {
       const payloadColor: ComandoLuces = {
         accion: 'color',
@@ -228,13 +286,14 @@ export class TraductorLuces {
       };
     }
 
+    // 5. Resolución y validación de intensidad
     const intensidadResuelta = TraductorLuces.resolverIntensidad(
-      grupoResuelto.textoSinGrupo,
+      grupoResuelto.textoSinGrupo ?? textoNormalizado,
       palabras,
       esBlackout
     );
 
-    if (intensidadResuelta === null) {
+    if (!intensidadResuelta.exito || intensidadResuelta.accion === undefined || intensidadResuelta.valor === undefined) {
       return {
         exito: false,
         textoOriginal,
@@ -242,9 +301,10 @@ export class TraductorLuces {
         comandoPayload: null,
         sintaxisMA2: null,
         etiquetaGrupo: `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
-        etiquetaAccion: 'Ambigua',
+        etiquetaAccion: 'Pendiente',
         etiquetaValor: '—',
         mensajeError:
+          intensidadResuelta.error ??
           'Indica una acción o intensidad (ej. "encender", "apagar", "al 50%") o un color (ej. "rojo", "azul", "ámbar").',
       };
     }
@@ -279,16 +339,84 @@ export class TraductorLuces {
     textoNormalizado: string,
     palabras: readonly string[],
     esBlackout: boolean
-  ): { id: string; nombre: string; textoSinGrupo: string } | null {
-    const coincidenciaRango = /\bgrupos?\s+(\d+)\s*(?:al|a|hasta|thru|-)\s*(\d+)\b/.exec(
+  ): ResolucionGrupoInterna {
+    // A. Detectar grupos del catálogo mencionados por sinónimo
+    const gruposCatalogoCoincidentes = CATALOGO_GRUPOS.filter((grupo) =>
+      grupo.sinonimos.some((sinonimo) => palabras.includes(sinonimo))
+    );
+
+    // B. Detectar rangos numéricos: "grupos 1 al 3", "grupos 1 a 6", etc. (sin consumir porcentaje)
+    const coincidenciaRango = /\bgrupos?\s+(\d+)\s*(?:al|a|hasta|thru|-)\s*(\d+)(?!\s*%)\b/.exec(
       textoNormalizado
     );
+
+    // C. Detectar grupos numéricos individuales o enumerados: "grupo 1", "grupos 1 y 2"
+    const regexGrupoIndividual = /\bgrupos?\s+(\d+)\b/g;
+    const gruposNumericos: string[] = [];
+    let matchGrupo: RegExpExecArray | null;
+    while ((matchGrupo = regexGrupoIndividual.exec(textoNormalizado)) !== null) {
+      gruposNumericos.push(matchGrupo[1]);
+    }
+
+    const tieneGruposEnumerados = /\bgrupos?\s+(\d+)\s*(?:y|,|e)\s*(\d+)\b/.test(textoNormalizado);
+
+    // D. Detectar palabras generales ("todos", "general", etc.)
+    const tienePalabraGeneral = PALABRAS_GENERAL.some((palabra) => palabras.includes(palabra));
+
+    // Detección de ambigüedad por múltiples grupos
+    if (gruposCatalogoCoincidentes.length > 1 || tieneGruposEnumerados) {
+      return {
+        exito: false,
+        esAmbiguo: true,
+        error: 'Orden ambigua: se detectaron múltiples grupos o zonas en la misma instrucción.',
+      };
+    }
+
+    if (coincidenciaRango !== null && gruposCatalogoCoincidentes.length > 0) {
+      return {
+        exito: false,
+        esAmbiguo: true,
+        error: 'Orden ambigua: se detectaron múltiples grupos o zonas en la misma instrucción.',
+      };
+    }
+
+    if (coincidenciaRango === null && gruposNumericos.length > 1) {
+      return {
+        exito: false,
+        esAmbiguo: true,
+        error: 'Orden ambigua: se detectaron múltiples grupos o zonas en la misma instrucción.',
+      };
+    }
+
+    if (
+      coincidenciaRango === null &&
+      gruposNumericos.length === 1 &&
+      gruposCatalogoCoincidentes.length > 0 &&
+      gruposCatalogoCoincidentes[0].id !== gruposNumericos[0]
+    ) {
+      return {
+        exito: false,
+        esAmbiguo: true,
+        error: 'Orden ambigua: se detectaron múltiples grupos o zonas en la misma instrucción.',
+      };
+    }
+
+    if (tienePalabraGeneral && (gruposCatalogoCoincidentes.length > 0 || gruposNumericos.length > 0)) {
+      return {
+        exito: false,
+        esAmbiguo: true,
+        error: 'Orden ambigua: se detectaron múltiples grupos o zonas en la misma instrucción.',
+      };
+    }
+
+    // Resolución de Rango
     if (coincidenciaRango !== null) {
       const inicio = Number(coincidenciaRango[1]);
       const fin = Number(coincidenciaRango[2]);
-      if (Number.isInteger(inicio) && Number.isInteger(fin) && inicio > 0 && fin >= inicio) {
+      if (Number.isInteger(inicio) && Number.isInteger(fin) && inicio > 0) {
         const idRango = `${inicio} thru ${fin}`;
         return {
+          exito: true,
           id: idRango,
           nombre: `Grupos ${inicio}–${fin}`,
           textoSinGrupo: textoNormalizado.replace(coincidenciaRango[0], ' ').trim(),
@@ -296,90 +424,146 @@ export class TraductorLuces {
       }
     }
 
-    const coincidenciaGrupoUnico = /\bgrupos?\s+(\d+)\b/.exec(textoNormalizado);
-    if (coincidenciaGrupoUnico !== null) {
-      const idGrupo = coincidenciaGrupoUnico[1];
+    // Resolución de Grupo Numérico Individual
+    if (coincidenciaRango === null && gruposNumericos.length === 1) {
+      const idGrupo = gruposNumericos[0];
       const grupoConocido = CATALOGO_GRUPOS.find((g) => g.id === idGrupo);
+      if (grupoConocido === undefined) {
+        return {
+          exito: false,
+          error: `El grupo ${idGrupo} no existe en el catálogo configurado (grupos válidos: 1 al ${CATALOGO_GRUPOS.length}).`,
+        };
+      }
+      const matchTexto = `grupo ${idGrupo}`;
+      const matchPlural = `grupos ${idGrupo}`;
+      let textoLimpio = textoNormalizado.replace(matchTexto, ' ');
+      textoLimpio = textoLimpio.replace(matchPlural, ' ').trim();
       return {
+        exito: true,
         id: idGrupo,
-        nombre: grupoConocido !== undefined ? grupoConocido.nombre : `Grupo ${idGrupo}`,
-        textoSinGrupo: textoNormalizado.replace(coincidenciaGrupoUnico[0], ' ').trim(),
+        nombre: grupoConocido.nombre,
+        textoSinGrupo: textoLimpio,
       };
     }
 
-    for (const grupo of CATALOGO_GRUPOS) {
-      const coincide = grupo.sinonimos.some((sinonimo) => palabras.includes(sinonimo));
-      if (coincide) {
-        return {
-          id: grupo.id,
-          nombre: grupo.nombre,
-          textoSinGrupo: textoNormalizado,
-        };
+    // Resolución de Grupo por Sinónimo
+    if (gruposCatalogoCoincidentes.length === 1) {
+      const grupo = gruposCatalogoCoincidentes[0];
+      let textoLimpio = textoNormalizado;
+      for (const s of grupo.sinonimos) {
+        if (palabras.includes(s)) {
+          textoLimpio = textoLimpio.replace(new RegExp(`\\b${s}\\b`, 'g'), ' ');
+        }
       }
+      return {
+        exito: true,
+        id: grupo.id,
+        nombre: grupo.nombre,
+        textoSinGrupo: textoLimpio.trim(),
+      };
     }
 
-    if (esBlackout || PALABRAS_GENERAL.some((palabra) => palabras.includes(palabra))) {
+    // Resolución de Modo General / Blackout
+    if (esBlackout || tienePalabraGeneral) {
       return {
+        exito: true,
         id: '1 thru 6',
         nombre: 'General (Todos)',
         textoSinGrupo: textoNormalizado,
       };
     }
 
-    return null;
-  }
-
-  private static resolverColor(palabras: readonly string[]): DefinicionColorMA2 | null {
-    for (const color of CATALOGO_COLORES) {
-      if (color.sinonimos.some((sinonimo) => palabras.includes(sinonimo))) {
-        return color;
-      }
-    }
-    return null;
+    return {
+      exito: false,
+      error: 'No se identificó el grupo o zona. Prueba indicando: frontales, contraluz, laterales, wash, móviles, público o "grupo 1".',
+    };
   }
 
   private static resolverIntensidad(
     textoSinGrupo: string,
     palabras: readonly string[],
     esBlackout: boolean
-  ): { accion: TipoAccionLuz; valor: string } | null {
-    if (esBlackout || PALABRAS_APAGAR.some((palabra) => palabras.includes(palabra))) {
-      return { accion: 'apagar', valor: '0' };
-    }
-
-    const coincidenciaPorcentaje = /\b(\d+(?:\.\d+)?)\s*%?/.exec(textoSinGrupo);
+  ): ResolucionIntensidadInterna {
+    const tieneApagar = esBlackout || PALABRAS_APAGAR.some((palabra) => palabras.includes(palabra));
     const tieneEncender = PALABRAS_ENCENDER.some((palabra) => palabras.includes(palabra));
     const tieneAjustar = PALABRAS_AJUSTAR.some((palabra) => palabras.includes(palabra));
 
-    if (coincidenciaPorcentaje !== null) {
-      const numero = Number(coincidenciaPorcentaje[1]);
-      if (Number.isFinite(numero) && numero >= 0 && numero <= 100) {
-        const valorRedondeado = Number.isInteger(numero)
-          ? String(numero)
-          : String(Math.round(numero * 100) / 100);
+    // A. Detección de números malformados (múltiples puntos decimales, etc.)
+    if (/\d+\.\d+\.\d+/.test(textoSinGrupo) || /\d+\.\./.test(textoSinGrupo) || /\.\.\d+/.test(textoSinGrupo)) {
+      return {
+        exito: false,
+        error: 'El valor de intensidad contiene un formato numérico malformado.',
+      };
+    }
 
-        if (numero === 0) {
-          return { accion: 'apagar', valor: '0' };
-        }
-        if (tieneEncender) {
-          return { accion: 'encender', valor: valorRedondeado };
-        }
-        return { accion: 'ajustar', valor: valorRedondeado };
+    // B. Búsqueda de valores numéricos de intensidad o porcentaje
+    const matchPorcentaje = /(-?\d+(?:\.\d+)?)\s*%/.exec(textoSinGrupo);
+    const matchNumero = /(?:^|\s)(-?\d+(?:\.\d+)?)(?:\s|$)/.exec(textoSinGrupo);
+    const numeroCandidatoStr = matchPorcentaje ? matchPorcentaje[1] : matchNumero ? matchNumero[1] : null;
+
+    if (numeroCandidatoStr !== null) {
+      const numero = Number(numeroCandidatoStr);
+      if (!Number.isFinite(numero) || isNaN(numero)) {
+        return {
+          exito: false,
+          error: 'El valor de intensidad contiene un formato numérico malformado.',
+        };
       }
+
+      if (numero < 0 || numero > 100) {
+        return {
+          exito: false,
+          error: 'El valor de intensidad debe estar entre 0 y 100%.',
+        };
+      }
+
+      // Si se intentó apagar indicando un valor numérico superior a 0
+      if (tieneApagar && numero > 0) {
+        return {
+          exito: false,
+          error: 'Orden contradictoria: no se puede apagar con un valor de intensidad mayor a 0%.',
+        };
+      }
+
+      const valorRedondeado = Number.isInteger(numero)
+        ? String(numero)
+        : String(Math.round(numero * 100) / 100);
+
+      if (numero === 0) {
+        return { exito: true, accion: 'apagar', valor: '0' };
+      }
+      if (tieneEncender) {
+        return { exito: true, accion: 'encender', valor: valorRedondeado };
+      }
+      return { exito: true, accion: 'ajustar', valor: valorRedondeado };
     }
 
+    // C. Si tiene intención explícita de apagar
+    if (tieneApagar) {
+      return { exito: true, accion: 'apagar', valor: '0' };
+    }
+
+    // D. Valores semánticos reconocidos ("mitad" / "medio")
     if (palabras.includes('mitad') || palabras.includes('medio')) {
-      return { accion: 'ajustar', valor: '50' };
+      return { exito: true, accion: 'ajustar', valor: '50' };
     }
 
+    // E. Encender sin número explícito implica 100%
     if (tieneEncender) {
-      return { accion: 'encender', valor: '100' };
+      return { exito: true, accion: 'encender', valor: '100' };
     }
 
+    // F. Órdenes relativas de ajuste (subir, bajar, etc.) SIN intensidad: NO asumir 50%
     if (tieneAjustar) {
-      return { accion: 'ajustar', valor: '50' };
+      return {
+        exito: false,
+        error: 'Especifica el nivel o porcentaje de intensidad para ajustar (ej. "subir frontales al 70%").',
+      };
     }
 
-    return null;
+    return {
+      exito: false,
+      error: 'Indica una acción o intensidad (ej. "encender", "apagar", "al 50%") o un color (ej. "rojo", "azul", "ámbar").',
+    };
   }
 }
