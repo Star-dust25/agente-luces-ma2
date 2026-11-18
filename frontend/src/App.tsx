@@ -7,6 +7,7 @@ import {
   type DefinicionColorMA2,
   type ResultadoInterpretacion,
 } from './diccionario/TraductorLuces';
+import { bloqueoDeSeguridad } from './seguridadComandos';
 import type {
   ComandoLuces,
   EstadoConexionMA2,
@@ -49,6 +50,9 @@ const EJEMPLOS_RAPIDOS = [
   'Wash al 100%',
   'Apagar frontales',
 ] as const;
+
+// Temporal: el backend todavía no confirma la autenticación ni la ejecución en MA2.
+const ENVIO_FISICO_HABILITADO: boolean = false;
 
 function horaActual(): string {
   return new Intl.DateTimeFormat('es-PE', {
@@ -114,12 +118,21 @@ export default function App() {
 
   const timersRef = useRef<Map<string, number>>(new Map());
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const enviandoRef = useRef(false);
+  const ultimoIntentoRef = useRef<{ clave: string; instante: number } | null>(null);
 
   const interpretacion = useMemo<ResultadoInterpretacion | null>(() => {
     if (orden.trim().length === 0) {
       return null;
     }
-    return TraductorLuces.interpretarOrden(orden);
+    const resultado = TraductorLuces.interpretarOrden(orden);
+    if (resultado.exito && resultado.comandoPayload !== null) {
+      const bloqueo = bloqueoDeSeguridad(resultado.comandoPayload, resultado.textoOriginal);
+      if (bloqueo !== null) {
+        return { ...resultado, exito: false, comandoPayload: null, sintaxisMA2: null, mensajeError: bloqueo };
+      }
+    }
+    return resultado;
   }, [orden]);
 
   const lanzarToast = useCallback((nivel: NivelLog, titulo: string, detalle: string) => {
@@ -156,7 +169,7 @@ export default function App() {
           ]);
           setEstadoConexion(estado);
           if (notificar) {
-            lanzarToast('exito', 'Consola sincronizada', `Estado Telnet: ${estado}`);
+            lanzarToast('info', 'Estado consultado', `Backend reporta: ${estado}. Envío físico deshabilitado.`);
           }
         } else {
           await new Promise<void>((r) => window.setTimeout(r, 380));
@@ -235,9 +248,20 @@ export default function App() {
       textoOriginal: string | null = null,
       color?: DefinicionColorMA2
     ) => {
+      const bloqueo = bloqueoDeSeguridad(payload, textoOriginal);
+      if (bloqueo !== null) {
+        lanzarToast('advertencia', 'Orden bloqueada', bloqueo);
+        return;
+      }
+      if (enviandoRef.current) return;
+      const clave = JSON.stringify(payload);
+      const ahora = Date.now();
+      if (ultimoIntentoRef.current?.clave === clave && ahora - ultimoIntentoRef.current.instante < 900) return;
+      ultimoIntentoRef.current = { clave, instante: ahora };
+      enviandoRef.current = true;
       setEnviando(true);
       try {
-        if (window.api !== undefined) {
+        if (ENVIO_FISICO_HABILITADO && estadoConexion === 'AUTENTICADO' && window.api !== undefined) {
           const respuesta: RespuestaComandoIPC = await window.api.enviarComandoLuces(payload);
           setEstadoConexion(respuesta.estadoConexion);
           const comandoFinal = respuesta.comandoGenerado?.trim() ?? sintaxisMA2;
@@ -267,22 +291,23 @@ export default function App() {
           actualizarEstadoGrupoLocal(payload, color);
           registrarLog({
             nivel: 'info',
-            titulo,
+            titulo: `Simulación · ${titulo}`,
             sintaxisMA2,
             comandoPayload: payload,
             textoOriginal,
           });
-          lanzarToast('info', titulo, sintaxisMA2);
+          lanzarToast('info', 'Simulación · Sin envío físico', sintaxisMA2);
         }
       } finally {
+        enviandoRef.current = false;
         setEnviando(false);
       }
     },
-    [actualizarEstadoGrupoLocal, lanzarToast, registrarLog]
+    [actualizarEstadoGrupoLocal, estadoConexion, lanzarToast, registrarLog]
   );
 
   const procesarFormulario = useCallback(async () => {
-    const res = TraductorLuces.interpretarOrden(orden);
+    const res = interpretacion ?? TraductorLuces.interpretarOrden(orden);
     if (!res.exito || res.comandoPayload === null || res.sintaxisMA2 === null) {
       const msg = res.mensajeError ?? 'No se pudo interpretar la instrucción.';
       lanzarToast('advertencia', 'Orden incompleta', msg);
@@ -294,7 +319,7 @@ export default function App() {
       `${res.etiquetaAccion} · ${res.etiquetaGrupo}`,
       res.textoOriginal
     );
-  }, [enviarComando, lanzarToast, orden]);
+  }, [enviarComando, interpretacion, lanzarToast, orden]);
 
   const accionRapidaGrupo = useCallback(
     async (idGrupo: string, porcentaje: number) => {
@@ -361,8 +386,6 @@ export default function App() {
   const logEnMenu =
     menu?.tipo === 'log' ? logs.find((item) => item.id === menu.idLog) : undefined;
 
-  const conectado = estadoConexion === 'AUTENTICADO' || estadoConexion === 'CONECTADO';
-
   return (
     <div className="lienzo">
       <div className="resplandor-carmesi" aria-hidden="true" />
@@ -373,20 +396,16 @@ export default function App() {
           <div className="marca">
             <span className="marca-punto" aria-hidden="true" />
             <h1>GrandMA2</h1>
-            <span className="badge badge-sutil">Control NLP</span>
+            <span className="badge badge-sutil">Modo demo · Sin envío físico</span>
           </div>
 
           <div className="cabecera-derecha">
             {cargando ? (
               <span className="skeleton skeleton-badge" aria-label="Cargando estado" />
             ) : (
-              <span className={`badge ${conectado ? 'badge-activo' : 'badge-sutil'}`}>
+              <span className="badge badge-sutil" title="Estado reportado por el backend; autenticación no verificada">
                 <span className="indicador-estado" />
-                {estadoConexion === 'AUTENTICADO'
-                  ? 'MA2 Conectado'
-                  : estadoConexion === 'WEB'
-                    ? 'Simulador Web'
-                    : estadoConexion}
+                {estadoConexion === 'WEB' ? 'Simulador Web' : `Backend: ${estadoConexion} (no verificado)`}
               </span>
             )}
 
@@ -401,8 +420,8 @@ export default function App() {
             <button
               type="button"
               className="btn-carmesi-borde"
-              onClick={() => void accionRapidaGrupo('1 thru 6', 0)}
-              disabled={enviando}
+              disabled
+              title="Blackout general bloqueado en modo demo"
             >
               Blackout
             </button>
@@ -464,7 +483,7 @@ export default function App() {
           <section className="panel glass">
             <div className="panel-titulo">
               <h2>Orden de Iluminación</h2>
-              <span className="texto-gris">Enter para ejecutar</span>
+              <span className="texto-gris">Enter para simular</span>
             </div>
 
             <div className="campo-contenedor">
@@ -526,7 +545,7 @@ export default function App() {
                   onClick={() => void procesarFormulario()}
                   disabled={orden.trim().length === 0 || enviando}
                 >
-                  {enviando ? 'Enviando...' : 'Ejecutar'}
+                  {enviando ? 'Simulando...' : 'Simular'}
                 </button>
               </div>
             </div>
@@ -558,7 +577,7 @@ export default function App() {
                   </div>
                 ))
               ) : logs.length === 0 ? (
-                <p className="vacio">Sin comandos ejecutados todavía.</p>
+                <p className="vacio">Sin simulaciones todavía.</p>
               ) : (
                 logs.map((log) => (
                   <div
@@ -672,7 +691,7 @@ export default function App() {
                     }
                   }}
                 >
-                  Reenviar comando
+                  Repetir simulación
                 </button>
               )}
               {logEnMenu.sintaxisMA2 !== null && (

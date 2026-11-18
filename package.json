@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
-    "start": "npm run build && electron ."
+    "start": "npm run build && electron .",
+    "test": "npm --prefix frontend test"
   },
   "keywords": [],
   "author": "",
