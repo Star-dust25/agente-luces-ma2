@@ -17,16 +17,19 @@ export class ConstructorComandosMA2 implements IConstructorComandosMA2 {
   private static readonly INTENSIDAD_MINIMA = 0;
   private static readonly INTENSIDAD_MAXIMA = 100;
   private static readonly EXPRESION_GRUPO_VALIDO = /^\d+(?:\s*(?:thru|\+|-)\s*\d+)*$/i;
+  private static readonly EXPRESION_PRESET_COLOR_VALIDO = /^(?:4\.)?[1-9]\d?$/;
   private static readonly EXPRESION_CARACTERES_CONTROL = /[\r\n\0]/;
 
   /**
    * Construye la instrucción Telnet exacta que requiere la consola GrandMA2.
-   * Ejemplo de salida: "Group 1 At 50\r\n"
+   * Ejemplos de salida: "Group 1 At 50\r\n" o "Group 1 At Preset 4.2\r\n"
    */
   public construirComando(comando: ComandoLuces): string {
     switch (comando.tipo) {
       case 'intensidad':
         return this.construirComandoIntensidad(comando);
+      case 'color':
+        return this.construirComandoColor(comando);
       default: {
         const tipoNoSoportado: never = comando.tipo;
         throw new Error(`Tipo de parámetro no soportado para GrandMA2: ${String(tipoNoSoportado)}`);
@@ -52,6 +55,31 @@ export class ConstructorComandosMA2 implements IConstructorComandosMA2 {
     const intensidadResuelta = this.resolverValorIntensidad(comando.accion, comando.valor);
 
     return `Group ${grupoNormalizado} At ${intensidadResuelta}${ConstructorComandosMA2.TERMINADOR_LINEA_MA2}`;
+  }
+
+  /**
+   * Traduce un comando de color a sintaxis de preset en GrandMA2:
+   * "Group <grupo> At Preset 4.<indice>\r\n".
+   */
+  private construirComandoColor(comando: ComandoLuces): string {
+    const grupoNormalizado = this.sanitizarGrupo(comando.grupo);
+    const presetNormalizado = this.normalizarPresetColor(comando.valor);
+
+    return `Group ${grupoNormalizado} At Preset ${presetNormalizado}${ConstructorComandosMA2.TERMINADOR_LINEA_MA2}`;
+  }
+
+  /**
+   * Normaliza el identificador del preset de color hacia el pool 4 de GrandMA2.
+   */
+  private normalizarPresetColor(valorPreset: string): string {
+    const presetLimpio = valorPreset.trim();
+    if (!ConstructorComandosMA2.EXPRESION_PRESET_COLOR_VALIDO.test(presetLimpio)) {
+      throw new Error(
+        `El preset de color "${valorPreset}" no es válido. Se esperaba un índice de preset (ej. "4.2" o "2").`
+      );
+    }
+
+    return presetLimpio.includes('.') ? presetLimpio : `4.${presetLimpio}`;
   }
 
   /**

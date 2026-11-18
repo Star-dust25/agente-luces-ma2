@@ -101,7 +101,7 @@ class ControladorPrincipalMA2 {
       this.ventanaPrincipal = null;
     });
 
-    const rutaHtmlFrontend = path.join(__dirname, '..', 'index.html');
+    const rutaHtmlFrontend = path.join(__dirname, '..', 'frontend', 'dist', 'index.html');
     void this.ventanaPrincipal.loadFile(rutaHtmlFrontend).catch((error: unknown) => {
       const detalle = error instanceof Error ? error.message : String(error);
       console.warn(
@@ -147,7 +147,7 @@ class ControladorPrincipalMA2 {
   private async procesarCargaUtilIPC(cargaUtil: unknown): Promise<RespuestaComandoIPC> {
     if (!esComandoLucesValido(cargaUtil)) {
       const mensajeError =
-        'Carga útil IPC inválida. Se requiere: { accion: "encender" | "apagar" | "ajustar", grupo: string, valor: "0".."100", tipo: "intensidad" }.';
+        'Carga útil IPC inválida. Se requiere: { accion: "encender" | "apagar" | "ajustar" | "color", grupo: string, valor: string, tipo: "intensidad" | "color" }.';
       console.warn(`[Main] ${mensajeError}`, cargaUtil);
       return this.crearRespuesta(false, null, mensajeError);
     }
