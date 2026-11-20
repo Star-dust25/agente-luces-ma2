@@ -51,8 +51,27 @@ const EJEMPLOS_RAPIDOS = [
   'Apagar frontales',
 ] as const;
 
-// Temporal: el backend todavía no confirma la autenticación ni la ejecución en MA2.
-const ENVIO_FISICO_HABILITADO: boolean = false;
+function etiquetaEstadoConexion(estado: EstadoConexionMA2 | 'WEB'): {
+  texto: string;
+  clase: string;
+} {
+  switch (estado) {
+    case 'AUTENTICADO':
+      return { texto: 'MA2 Autenticado', clase: 'badge-activo' };
+    case 'CONECTADO':
+      return { texto: 'TCP Conectado', clase: 'badge-sutil' };
+    case 'CONECTANDO':
+      return { texto: 'Conectando...', clase: 'badge-sutil' };
+    case 'RECONECTANDO':
+      return { texto: 'Reconectando...', clase: 'badge-sutil' };
+    case 'ERROR':
+      return { texto: 'Error Telnet', clase: 'badge-activo' };
+    case 'DESCONECTADO':
+      return { texto: 'Desconectado', clase: 'badge-sutil' };
+    case 'WEB':
+      return { texto: 'Simulador Web', clase: 'badge-sutil' };
+  }
+}
 
 function horaActual(): string {
   return new Intl.DateTimeFormat('es-PE', {
@@ -97,8 +116,8 @@ function expandirGrupos(grupo: string): readonly string[] {
 
 function posicionarMenu(x: number, y: number): { left: number; top: number } {
   return {
-    left: Math.min(x, Math.max(16, window.innerWidth - 220)),
-    top: Math.min(y, Math.max(16, window.innerHeight - 250)),
+    left: Math.min(x, Math.max(16, window.innerWidth - 224)),
+    top: Math.min(y, Math.max(16, window.innerHeight - 410)),
   };
 }
 
@@ -115,8 +134,10 @@ export default function App() {
   const [logs, setLogs] = useState<RegistroLog[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [menu, setMenu] = useState<MenuContextual | null>(null);
+  const [confirmandoBlackout, setConfirmandoBlackout] = useState<boolean>(false);
 
   const timersRef = useRef<Map<string, number>>(new Map());
+  const timerBlackoutRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const enviandoRef = useRef(false);
   const ultimoIntentoRef = useRef<{ clave: string; instante: number } | null>(null);
@@ -169,7 +190,7 @@ export default function App() {
           ]);
           setEstadoConexion(estado);
           if (notificar) {
-            lanzarToast('info', 'Estado consultado', `Backend reporta: ${estado}. Envío físico deshabilitado.`);
+            lanzarToast('exito', 'Consola sincronizada', `Estado Telnet: ${estado}`);
           }
         } else {
           await new Promise<void>((r) => window.setTimeout(r, 380));
@@ -210,6 +231,19 @@ export default function App() {
       window.removeEventListener('keydown', escape);
     };
   }, [menu]);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const timer of timers.values()) {
+        window.clearTimeout(timer);
+      }
+      timers.clear();
+      if (timerBlackoutRef.current !== null) {
+        window.clearTimeout(timerBlackoutRef.current);
+      }
+    };
+  }, []);
 
   const actualizarEstadoGrupoLocal = useCallback(
     (payload: ComandoLuces, color?: DefinicionColorMA2) => {
@@ -261,7 +295,7 @@ export default function App() {
       enviandoRef.current = true;
       setEnviando(true);
       try {
-        if (ENVIO_FISICO_HABILITADO && estadoConexion === 'AUTENTICADO' && window.api !== undefined) {
+        if (window.api !== undefined) {
           const respuesta: RespuestaComandoIPC = await window.api.enviarComandoLuces(payload);
           setEstadoConexion(respuesta.estadoConexion);
           const comandoFinal = respuesta.comandoGenerado?.trim() ?? sintaxisMA2;
@@ -291,19 +325,19 @@ export default function App() {
           actualizarEstadoGrupoLocal(payload, color);
           registrarLog({
             nivel: 'info',
-            titulo: `Simulación · ${titulo}`,
+            titulo: `Simulación Web · ${titulo}`,
             sintaxisMA2,
             comandoPayload: payload,
             textoOriginal,
           });
-          lanzarToast('info', 'Simulación · Sin envío físico', sintaxisMA2);
+          lanzarToast('info', `${titulo} (Web)`, sintaxisMA2);
         }
       } finally {
         enviandoRef.current = false;
         setEnviando(false);
       }
     },
-    [actualizarEstadoGrupoLocal, estadoConexion, lanzarToast, registrarLog]
+    [actualizarEstadoGrupoLocal, lanzarToast, registrarLog]
   );
 
   const procesarFormulario = useCallback(async () => {
@@ -382,9 +416,36 @@ export default function App() {
     }
   };
 
+  const manejarBlackout = useCallback(() => {
+    if (!confirmandoBlackout) {
+      setConfirmandoBlackout(true);
+      if (timerBlackoutRef.current !== null) {
+        window.clearTimeout(timerBlackoutRef.current);
+      }
+      timerBlackoutRef.current = window.setTimeout(() => {
+        timerBlackoutRef.current = null;
+        setConfirmandoBlackout(false);
+      }, 3500);
+      lanzarToast(
+        'advertencia',
+        'Confirmar Blackout',
+        'Haz clic nuevamente para apagar todos los grupos (1 al 6).'
+      );
+      return;
+    }
+
+    if (timerBlackoutRef.current !== null) {
+      window.clearTimeout(timerBlackoutRef.current);
+      timerBlackoutRef.current = null;
+    }
+    setConfirmandoBlackout(false);
+    void accionRapidaGrupo('1 thru 6', 0);
+  }, [accionRapidaGrupo, confirmandoBlackout, lanzarToast]);
+
   const grupoEnMenu = menu?.tipo === 'grupo' ? grupos[menu.idGrupo] : undefined;
   const logEnMenu =
     menu?.tipo === 'log' ? logs.find((item) => item.id === menu.idLog) : undefined;
+  const infoEstado = etiquetaEstadoConexion(estadoConexion);
 
   return (
     <div className="lienzo">
@@ -396,16 +457,20 @@ export default function App() {
           <div className="marca">
             <span className="marca-punto" aria-hidden="true" />
             <h1>GrandMA2</h1>
-            <span className="badge badge-sutil">Modo demo · Sin envío físico</span>
+            <span className="badge badge-sutil">Control NLP</span>
           </div>
 
           <div className="cabecera-derecha">
             {cargando ? (
               <span className="skeleton skeleton-badge" aria-label="Cargando estado" />
             ) : (
-              <span className="badge badge-sutil" title="Estado reportado por el backend; autenticación no verificada">
+              <span
+                className={`badge ${infoEstado.clase}`}
+                role="status"
+                title="Estado en vivo de la sesión TCP/Telnet con GrandMA2"
+              >
                 <span className="indicador-estado" />
-                {estadoConexion === 'WEB' ? 'Simulador Web' : `Backend: ${estadoConexion} (no verificado)`}
+                {infoEstado.texto}
               </span>
             )}
 
@@ -419,11 +484,12 @@ export default function App() {
             </button>
             <button
               type="button"
-              className="btn-carmesi-borde"
-              disabled
-              title="Blackout general bloqueado en modo demo"
+              className={`btn-carmesi-borde${confirmandoBlackout ? ' armado' : ''}`}
+              onClick={manejarBlackout}
+              disabled={enviando}
+              title="Doble clic rápido para ejecutar apagón general (grupos 1 al 6)"
             >
-              Blackout
+              {confirmandoBlackout ? '¿Confirmar Blackout?' : 'Blackout'}
             </button>
           </div>
         </header>
@@ -483,7 +549,7 @@ export default function App() {
           <section className="panel glass">
             <div className="panel-titulo">
               <h2>Orden de Iluminación</h2>
-              <span className="texto-gris">Enter para simular</span>
+              <span className="texto-gris">Enter para ejecutar</span>
             </div>
 
             <div className="campo-contenedor">
@@ -545,7 +611,7 @@ export default function App() {
                   onClick={() => void procesarFormulario()}
                   disabled={orden.trim().length === 0 || enviando}
                 >
-                  {enviando ? 'Simulando...' : 'Simular'}
+                  {enviando ? 'Enviando...' : 'Ejecutar'}
                 </button>
               </div>
             </div>
@@ -577,7 +643,7 @@ export default function App() {
                   </div>
                 ))
               ) : logs.length === 0 ? (
-                <p className="vacio">Sin simulaciones todavía.</p>
+                <p className="vacio">Sin comandos ejecutados todavía.</p>
               ) : (
                 logs.map((log) => (
                   <div
@@ -656,7 +722,7 @@ export default function App() {
                 Apagar (0%)
               </button>
               <div className="menu-divisor" />
-              {CATALOGO_COLORES.slice(0, 4).map((color) => (
+              {CATALOGO_COLORES.map((color) => (
                 <button
                   key={color.id}
                   type="button"
@@ -666,7 +732,15 @@ export default function App() {
                     void colorRapidoGrupo(grupoEnMenu.id, color);
                   }}
                 >
-                  Color: {color.nombre}
+                  <span className="menu-color-item">
+                    <span
+                      className="menu-color-punto"
+                      style={{ backgroundColor: color.hex }}
+                      aria-hidden="true"
+                    />
+                    <span>{color.nombre}</span>
+                    <span className="menu-color-preset">{color.preset}</span>
+                  </span>
                 </button>
               ))}
             </>
@@ -691,7 +765,7 @@ export default function App() {
                     }
                   }}
                 >
-                  Repetir simulación
+                  Reenviar comando
                 </button>
               )}
               {logEnMenu.sintaxisMA2 !== null && (

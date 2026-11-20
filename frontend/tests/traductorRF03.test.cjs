@@ -214,6 +214,15 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
   assert.equal(gValido6.exito, true);
   assert.equal(gValido6.comandoPayload?.grupo, '6');
 
+  // Rangos invertidos o fuera de catálogo rechazados directamente por el traductor
+  const rInvertido = TraductorLuces.interpretarOrden('grupos 6 al 2 al 50%');
+  assert.equal(rInvertido.exito, false, 'Debe rechazar rangos invertidos directamente');
+  assert.match(rInvertido.mensajeError, /no es válido|menor o igual/i);
+
+  const rExcedido = TraductorLuces.interpretarOrden('grupos 1 al 1000000 al 50%');
+  assert.equal(rExcedido.exito, false, 'Debe rechazar rangos fuera del catálogo');
+  assert.match(rExcedido.mensajeError, /catálogo configurado/i);
+
   // Rangos limitados al catálogo
   assert.equal(validarRangoGrupos(1, 6), null);
   assert.match(validarRangoGrupos(7, 8), /excede el catálogo configurado/i);
@@ -223,7 +232,7 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
 }
 
 // ============================================================================
-// 6. Mantener compatibilidad con el contrato IPC
+// 6. Mantener compatibilidad con el contrato IPC y cobertura total RF-05 (9 colores)
 // ============================================================================
 {
   const pIntensidad = TraductorLuces.interpretarOrden('Frontales al 50%');
@@ -235,16 +244,31 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
   });
   assert.equal(pIntensidad.sintaxisMA2, 'Group 1 At 50');
 
-  const pColor = TraductorLuces.interpretarOrden('Contraluz en rojo');
-  assert.deepEqual(pColor.comandoPayload, {
-    accion: 'color',
-    grupo: '2',
-    valor: '4.2',
-    tipo: 'color',
-  });
-  assert.equal(pColor.sintaxisMA2, 'Group 2 At Preset 4.2');
+  const casosColoresRF05 = [
+    { orden: 'Frontales en blanco', preset: '4.1', grupo: '1' },
+    { orden: 'Contraluz en rojo', preset: '4.2', grupo: '2' },
+    { orden: 'Wash en ámbar', preset: '4.3', grupo: '4' },
+    { orden: 'Laterales en amarillo', preset: '4.4', grupo: '3' },
+    { orden: 'Móviles en verde', preset: '4.5', grupo: '5' },
+    { orden: 'Público en cian', preset: '4.6', grupo: '6' },
+    { orden: 'Frontales en azul', preset: '4.7', grupo: '1' },
+    { orden: 'Contraluz en magenta', preset: '4.8', grupo: '2' },
+    { orden: 'Wash en púrpura', preset: '4.9', grupo: '4' },
+  ];
 
-  console.log('  ✓ 6. Compatibilidad con el contrato IPC y sintaxis MA2: correcto');
+  for (const caso of casosColoresRF05) {
+    const resColor = TraductorLuces.interpretarOrden(caso.orden);
+    assert.equal(resColor.exito, true, `Debe traducir color RF-05: ${caso.orden}`);
+    assert.deepEqual(resColor.comandoPayload, {
+      accion: 'color',
+      grupo: caso.grupo,
+      valor: caso.preset,
+      tipo: 'color',
+    });
+    assert.equal(resColor.sintaxisMA2, `Group ${caso.grupo} At Preset ${caso.preset}`);
+  }
+
+  console.log('  ✓ 6. Compatibilidad IPC y los 9 colores de RF-05 (4.1 a 4.9): correcto');
 }
 
 console.log('\nTodos los casos de prueba de RF-03 pasaron exitosamente.');

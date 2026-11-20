@@ -381,8 +381,10 @@ textarea:focus-visible,
   font-weight: 500;
 }
 
-.btn-carmesi-borde:hover:not(:disabled) {
+.btn-carmesi-borde:hover:not(:disabled),
+.btn-carmesi-borde.armado {
   background: var(--carmesi);
+  box-shadow: 0 0 18px rgba(230, 30, 50, 0.55);
 }
 
 .btn-fantasma {
@@ -522,12 +524,14 @@ textarea:focus-visible,
 .menu-contextual {
   position: fixed;
   z-index: 50;
-  width: 206px;
+  width: 218px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  background: rgba(14, 14, 16, 0.92);
+  background: rgba(14, 14, 16, 0.94);
 }
 
 .menu-encabezado {
@@ -568,6 +572,26 @@ textarea:focus-visible,
 
 .texto-carmesi {
   color: var(--carmesi) !important;
+}
+
+.menu-color-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu-color-punto {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.menu-color-preset {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--gris-acero);
 }
 
 /* Toasts */

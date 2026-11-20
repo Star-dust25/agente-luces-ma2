@@ -16,7 +16,6 @@ export const TIPOS_PARAMETRO_PERMITIDOS: ReadonlySet<TipoParametroLuz> = new Set
 ]);
 
 const CARACTERES_CONTROL_O_INYECCION = /[\r\n;\x00-\x1f]/;
-const REGEX_BLACKOUT = /\b(apagon|apagones|black[\s-]*outs?)\b/i;
 const REGEX_RANGO_TEXTO = /\bgrupos?\s+(\d+)\s*(?:al|a|hasta|thru|-)\s*(\d+)(?!\s*%)\b/i;
 const REGEX_RANGO_GRUPO = /^(\d+)\s+thru\s+(\d+)$/i;
 const REGEX_GRUPO_INDIVIDUAL = /^0*([1-9]\d*)$/;
@@ -24,7 +23,7 @@ const REGEX_VALOR_NUMERICO = /^\d+(?:\.\d+)?$/;
 const REGEX_PRESET_COLOR = /^(?:4\.)?[1-9]\d?$/;
 
 /**
- * Valida que un rango numérico de grupos sea consistente y no exceda el límite permitido en modo demo.
+ * Valida que un rango numérico de grupos sea consistente y esté dentro del catálogo configurado.
  */
 export function validarRangoGrupos(inicioNum: number, finNum: number): string | null {
   if (
@@ -36,7 +35,7 @@ export function validarRangoGrupos(inicioNum: number, finNum: number): string | 
     return 'El rango de grupos no es válido.';
   }
   if (finNum - inicioNum + 1 > MAX_GRUPOS_EN_RANGO) {
-    return `Los rangos de más de ${MAX_GRUPOS_EN_RANGO} grupos están bloqueados en modo demo.`;
+    return `Los rangos de más de ${MAX_GRUPOS_EN_RANGO} grupos están bloqueados por seguridad.`;
   }
   if (inicioNum > MAX_GRUPOS_EN_RANGO || finNum > MAX_GRUPOS_EN_RANGO) {
     return `El rango de grupos excede el catálogo configurado (grupos 1 al ${MAX_GRUPOS_EN_RANGO}).`;
@@ -72,7 +71,7 @@ export function validarPresetColor(preset: string): string | null {
 
 /**
  * Evalúa las restricciones de seguridad tanto para la vista previa en vivo como para
- * todas las vías de simulación o envío de la UI de ClauCode Lights.
+ * todas las vías de envío hacia la consola GrandMA2.
  *
  * Retorna null si el comando es seguro, o un mensaje explicativo si debe ser bloqueado.
  */
@@ -107,11 +106,8 @@ export function bloqueoDeSeguridad(
     return 'La acción color no es compatible con el parámetro de intensidad.';
   }
 
-  // Detección de Blackout / Apagón en la orden textual
+  // Normalización del texto para validar rangos solicitados en la orden
   const orden = TraductorLuces.normalizarTexto(ordenOriginal ?? '');
-  if (REGEX_BLACKOUT.test(orden)) {
-    return 'Blackout general está bloqueado en modo demo.';
-  }
 
   // Validación de rangos en el texto de la orden
   const rangoSolicitado = REGEX_RANGO_TEXTO.exec(orden);
@@ -123,7 +119,7 @@ export function bloqueoDeSeguridad(
     if (errorRangoTexto !== null) return errorRangoTexto;
   }
 
-  // Validación del grupo o rango de grupos en el comando
+  // Validación del grupo o rango de grupos en el comando (incluyendo Blackout 1 thru 6)
   const grupo = (comando.grupo ?? '').trim().toLowerCase();
   const coincidenciaRango = REGEX_RANGO_GRUPO.exec(grupo);
   if (coincidenciaRango !== null) {
@@ -131,25 +127,14 @@ export function bloqueoDeSeguridad(
     const fin = Number(coincidenciaRango[2]);
     const errorRango = validarRangoGrupos(inicio, fin);
     if (errorRango !== null) return errorRango;
-
-    // Bloqueo de Blackout general sobre la totalidad de grupos (1 al 6)
-    const esBlackoutGeneral =
-      comando.tipo === 'intensidad' &&
-      (Number(comando.valor) === 0 || comando.accion === 'apagar') &&
-      inicio === 1 &&
-      fin === 6;
-
-    if (esBlackoutGeneral) {
-      return 'Blackout general está bloqueado en modo demo.';
-    }
   } else {
     const coincidenciaIndividual = REGEX_GRUPO_INDIVIDUAL.exec(grupo);
     if (coincidenciaIndividual === null) {
-      return 'El grupo indicado no es válido para la simulación.';
+      return 'El grupo indicado no es válido para la consola.';
     }
     const numeroGrupo = Number(coincidenciaIndividual[1]);
     if (!Number.isSafeInteger(numeroGrupo) || numeroGrupo < 1) {
-      return 'El grupo indicado no es válido para la simulación.';
+      return 'El grupo indicado no es válido para la consola.';
     }
     if (numeroGrupo > MAX_GRUPOS_EN_RANGO) {
       return `El grupo indicado no pertenece al catálogo configurado (grupos 1 al ${MAX_GRUPOS_EN_RANGO}).`;

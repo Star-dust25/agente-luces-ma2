@@ -27,35 +27,53 @@ function bloqueoDeOrden(orden) {
 }
 
 // ---------------------------------------------------------
-// Casos originales creados por Codex (1 - 8)
+// 1. Comandos válidos y Blackout permitido en operación real
 // ---------------------------------------------------------
 assert.equal(bloqueoDeOrden('Frontales al 50%'), null);
 assert.equal(bloqueoDeOrden('Apagar frontales'), null);
-assert.match(bloqueoDeOrden('Apagón general'), /Blackout/);
-assert.match(bloqueoDeOrden('Apagar todas'), /Blackout/);
-assert.match(bloqueoDeOrden('Grupos 1 al 1000000 al 50%'), /rangos/);
-assert.match(bloqueoDeOrden('Grupos 6 al 2 al 50%'), /rango/);
-assert.match(
+assert.equal(bloqueoDeOrden('Apagón general'), null);
+assert.equal(bloqueoDeOrden('Apagar todas'), null);
+assert.equal(bloqueoDeOrden('Blackout'), null);
+assert.equal(
   bloqueoDeSeguridad({ accion: 'apagar', grupo: '01 thru 06', valor: '0', tipo: 'intensidad' }),
-  /Blackout/
+  null
 );
+assert.equal(
+  bloqueoDeSeguridad({ accion: 'apagar', grupo: '1', valor: '0', tipo: 'intensidad' }, 'black out general'),
+  null
+);
+
+// ---------------------------------------------------------
+// 2. Bloqueo de rangos fuera del catálogo o invertidos
+// ---------------------------------------------------------
 assert.match(
   bloqueoDeSeguridad({ accion: 'ajustar', grupo: '1 thru 1000000', valor: '50', tipo: 'intensidad' }),
   /rangos/
 );
+assert.match(
+  bloqueoDeSeguridad({ accion: 'ajustar', grupo: '6 thru 2', valor: '50', tipo: 'intensidad' }),
+  /no es válido/
+);
+assert.match(
+  bloqueoDeSeguridad(
+    { accion: 'ajustar', grupo: '1', valor: '50', tipo: 'intensidad' },
+    'Grupos 1 al 1000000 al 50%'
+  ),
+  /rangos/
+);
 
 // ---------------------------------------------------------
-// Nuevos casos de seguridad del frontend
+// 3. Comandos de color válidos (vía NLP y payload directo)
 // ---------------------------------------------------------
-
-// 9. Comandos de color válidos (vía NLP y payload directo)
 assert.equal(bloqueoDeOrden('Contraluz en rojo'), null);
 assert.equal(
   bloqueoDeSeguridad({ accion: 'color', grupo: '2', valor: '4.2', tipo: 'color' }),
   null
 );
 
-// 10. Bloqueo de presets de color inválidos o sospechosos
+// ---------------------------------------------------------
+// 4. Bloqueo de presets de color inválidos o sospechosos
+// ---------------------------------------------------------
 assert.match(
   bloqueoDeSeguridad({ accion: 'color', grupo: '2', valor: 'inyeccion', tipo: 'color' }),
   /preset de color/
@@ -65,7 +83,9 @@ assert.match(
   /preset de color/
 );
 
-// 11. Bloqueo de intensidades fuera de límites numéricos [0, 100]
+// ---------------------------------------------------------
+// 5. Bloqueo de intensidades fuera de límites numéricos [0, 100]
+// ---------------------------------------------------------
 assert.match(
   bloqueoDeSeguridad({ accion: 'ajustar', grupo: '1', valor: '150', tipo: 'intensidad' }),
   /intensidad/
@@ -79,7 +99,9 @@ assert.match(
   /intensidad/
 );
 
-// 12. Detección y bloqueo de inyección de caracteres de control o comandos múltiples (';', '\r', '\n')
+// ---------------------------------------------------------
+// 6. Detección y bloqueo de inyección de caracteres de control o comandos múltiples (';', '\r', '\n')
+// ---------------------------------------------------------
 assert.match(
   bloqueoDeSeguridad({ accion: 'ajustar', grupo: '1; Off Group 2', valor: '50', tipo: 'intensidad' }),
   /seguridad/
@@ -96,14 +118,9 @@ assert.match(
   /seguridad/
 );
 
-// 13. Reconocimiento de orden directa de Blackout y variantes
-assert.match(bloqueoDeOrden('Blackout'), /Blackout/);
-assert.match(
-  bloqueoDeSeguridad({ accion: 'apagar', grupo: '1', valor: '0', tipo: 'intensidad' }, 'black out general'),
-  /Blackout/
-);
-
-// 14. Incompatibilidad entre acción y tipo de parámetro
+// ---------------------------------------------------------
+// 7. Incompatibilidad entre acción y tipo de parámetro
+// ---------------------------------------------------------
 assert.match(
   bloqueoDeSeguridad({ accion: 'color', grupo: '1', valor: '50', tipo: 'intensidad' }),
   /color no es compatible/
@@ -113,7 +130,9 @@ assert.match(
   /no es compatible/
 );
 
-// 15. Grupos individuales inválidos (0, negativos, texto no numérico)
+// ---------------------------------------------------------
+// 8. Grupos individuales inválidos (0, negativos, texto no numérico)
+// ---------------------------------------------------------
 assert.match(
   bloqueoDeSeguridad({ accion: 'encender', grupo: '0', valor: '100', tipo: 'intensidad' }),
   /no es válido/
@@ -123,10 +142,14 @@ assert.match(
   /no es válido/
 );
 
-// 16. Comando nulo o inválido
+// ---------------------------------------------------------
+// 9. Comando nulo o inválido
+// ---------------------------------------------------------
 assert.match(bloqueoDeSeguridad(null), /no es válido/);
 
-// 17. Funciones auxiliares de validación directa
+// ---------------------------------------------------------
+// 10. Funciones auxiliares de validación directa
+// ---------------------------------------------------------
 assert.equal(validarRangoGrupos(1, 6), null);
 assert.match(validarRangoGrupos(1, 7), /más de 6 grupos/);
 assert.match(validarRangoGrupos(5, 2), /no es válido/);
@@ -138,14 +161,20 @@ assert.match(validarValorIntensidad('xyz'), /número válido/);
 assert.equal(validarPresetColor('4.1'), null);
 assert.match(validarPresetColor('5.1'), /no es válido/);
 
-// 18. Verificación de función booleana esComandoSeguro
+// ---------------------------------------------------------
+// 11. Verificación de función booleana esComandoSeguro
+// ---------------------------------------------------------
 assert.equal(
   esComandoSeguro({ accion: 'encender', grupo: '1', valor: '100', tipo: 'intensidad' }),
   true
 );
 assert.equal(
   esComandoSeguro({ accion: 'apagar', grupo: '1 thru 6', valor: '0', tipo: 'intensidad' }),
+  true
+);
+assert.equal(
+  esComandoSeguro({ accion: 'ajustar', grupo: '1; Off 2', valor: '50', tipo: 'intensidad' }),
   false
 );
 
-console.log('Todos los casos de seguridad del frontend (18/18): correctos');
+console.log('Todos los casos de seguridad del frontend: correctos');

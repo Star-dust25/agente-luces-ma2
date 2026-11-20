@@ -413,15 +413,25 @@ export class TraductorLuces {
     if (coincidenciaRango !== null) {
       const inicio = Number(coincidenciaRango[1]);
       const fin = Number(coincidenciaRango[2]);
-      if (Number.isInteger(inicio) && Number.isInteger(fin) && inicio > 0) {
-        const idRango = `${inicio} thru ${fin}`;
+      if (!Number.isInteger(inicio) || !Number.isInteger(fin) || inicio < 1 || fin < inicio) {
         return {
-          exito: true,
-          id: idRango,
-          nombre: `Grupos ${inicio}–${fin}`,
-          textoSinGrupo: textoNormalizado.replace(coincidenciaRango[0], ' ').trim(),
+          exito: false,
+          error: 'El rango de grupos no es válido: el grupo inicial debe ser menor o igual al final.',
         };
       }
+      if (fin > CATALOGO_GRUPOS.length) {
+        return {
+          exito: false,
+          error: `El rango de grupos excede el catálogo configurado (grupos 1 al ${CATALOGO_GRUPOS.length}).`,
+        };
+      }
+      const idRango = `${inicio} thru ${fin}`;
+      return {
+        exito: true,
+        id: idRango,
+        nombre: `Grupos ${inicio}–${fin}`,
+        textoSinGrupo: textoNormalizado.replace(coincidenciaRango[0], ' ').trim(),
+      };
     }
 
     // Resolución de Grupo Numérico Individual

@@ -137,12 +137,12 @@ export class ConstructorComandosMA2 implements IConstructorComandosMA2 {
    * Valida que las credenciales no contengan saltos de línea ni caracteres de control Telnet.
    */
   private sanitizarCredencial(valor: string, nombreCampo: string): string {
-    const textoLimpio = valor.trim();
+    if (ConstructorComandosMA2.EXPRESION_CARACTERES_CONTROL.test(valor)) {
+      throw new Error(`El campo ${nombreCampo} contiene un formato inválido para Telnet.`);
+    }
 
-    if (
-      textoLimpio.length === 0 ||
-      ConstructorComandosMA2.EXPRESION_CARACTERES_CONTROL.test(textoLimpio)
-    ) {
+    const textoLimpio = valor.trim();
+    if (textoLimpio.length === 0) {
       throw new Error(`El campo ${nombreCampo} contiene un formato inválido para Telnet.`);
     }
 

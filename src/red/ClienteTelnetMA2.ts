@@ -41,6 +41,8 @@ const CONFIGURACION_POR_DEFECTO: ConfiguracionTelnetMA2 = {
  * Gestiona login automático, cola de resiliencia y reconexión con Exponential Backoff.
  */
 export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
+  private static readonly TIEMPO_ESPERA_AUTENTICACION_MS = 6000;
+
   private readonly configuracion: ConfiguracionTelnetMA2;
   private readonly constructorComandos: IConstructorComandosMA2;
   private readonly observadoresEstado: Set<ObservadorEstadoConexion> = new Set();
@@ -50,6 +52,7 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
   private estadoActual: EstadoConexionMA2 = 'DESCONECTADO';
   private intentosReconexion = 0;
   private temporizadorReconexion: NodeJS.Timeout | null = null;
+  private temporizadorAutenticacion: NodeJS.Timeout | null = null;
   private cierreIntencional = false;
   private loginEnviado = false;
 
@@ -111,6 +114,7 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
   public desconectar(): void {
     this.cierreIntencional = true;
     this.cancelarTemporizadorReconexion();
+    this.cancelarTemporizadorAutenticacion();
     this.vaciarColaConFallo();
     this.limpiarSocketActual();
     this.loginEnviado = false;
@@ -210,21 +214,31 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
   private manejarConexionExitosa(socketActivo: net.Socket): void {
     this.intentosReconexion = 0;
     this.loginEnviado = false;
+    this.cancelarTemporizadorAutenticacion();
     // Desactiva el timeout de lectura tras completar el handshake TCP para no cortar shows en pausa;
     // TCP KeepAlive sigue monitoreando caídas silenciosas del enlace.
     socketActivo.setTimeout(0);
     this.actualizarEstado('CONECTADO');
 
     console.info(
-      `[ClienteTelnetMA2] Conectado a GrandMA2 (${this.configuracion.host}:${this.configuracion.puerto}).`
+      `[ClienteTelnetMA2] Conectado a GrandMA2 (${this.configuracion.host}:${this.configuracion.puerto}). Esperando confirmación de login...`
     );
 
-    void this.enviarCredencialesLogin(socketActivo).then((autenticado) => {
-      if (!autenticado || this.socket !== socketActivo) {
+    void this.enviarCredencialesLogin(socketActivo).then((enviado) => {
+      if (this.socket !== socketActivo || this.cierreIntencional) {
         return;
       }
-      this.actualizarEstado('AUTENTICADO');
-      void this.procesarColaPendientes();
+
+      if (!enviado) {
+        console.error('[ClienteTelnetMA2] No se pudieron enviar las credenciales de login.');
+        this.actualizarEstado('ERROR');
+        socketActivo.destroy();
+        return;
+      }
+
+      if (this.estadoActual !== 'AUTENTICADO') {
+        this.iniciarTemporizadorAutenticacion(socketActivo);
+      }
     });
   }
 
@@ -263,11 +277,17 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
     console.debug(`[GrandMA2 <-] ${textoLimpio}`);
 
     if (/login incorrect/i.test(textoLimpio)) {
+      this.cancelarTemporizadorAutenticacion();
       console.error(
         '[ClienteTelnetMA2] Credenciales rechazadas por GrandMA2. Verifica usuario y contraseña.'
       );
       this.actualizarEstado('ERROR');
+      socketActivo.destroy();
       return;
+    }
+
+    if (/error\s*#\d+|illegal object|unknown command|syntax error/i.test(textoLimpio)) {
+      console.error(`[ClienteTelnetMA2] Error de comando devuelto por GrandMA2: ${textoLimpio}`);
     }
 
     if (/please login|login:/i.test(textoLimpio) && !this.loginEnviado) {
@@ -275,8 +295,14 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
       return;
     }
 
-    if (/logged in as/i.test(textoLimpio) && this.estadoActual !== 'AUTENTICADO') {
+    // Confirma autenticación real únicamente con un usuario distinto al invitado inicial ('guest').
+    if (
+      /logged in as\s+(?:user\s+)?'?(?!guest\b)[\w.-]+'?/i.test(textoLimpio) &&
+      this.estadoActual !== 'AUTENTICADO'
+    ) {
+      this.cancelarTemporizadorAutenticacion();
       this.actualizarEstado('AUTENTICADO');
+      console.info('[ClienteTelnetMA2] Sesión autenticada y confirmada por GrandMA2.');
       void this.procesarColaPendientes();
     }
   }
@@ -301,6 +327,7 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
   }
 
   private manejarCierreSocket(huboError: boolean): void {
+    this.cancelarTemporizadorAutenticacion();
     this.socket = null;
     this.loginEnviado = false;
 
@@ -352,6 +379,35 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
     }, retrasoFinalMs);
   }
 
+  private iniciarTemporizadorAutenticacion(socketActivo: net.Socket): void {
+    this.cancelarTemporizadorAutenticacion();
+
+    this.temporizadorAutenticacion = setTimeout(() => {
+      this.temporizadorAutenticacion = null;
+
+      if (
+        this.socket !== socketActivo ||
+        this.estadoActual === 'AUTENTICADO' ||
+        this.cierreIntencional
+      ) {
+        return;
+      }
+
+      console.error(
+        `[ClienteTelnetMA2] Tiempo de espera de autenticación agotado (${ClienteTelnetMA2.TIEMPO_ESPERA_AUTENTICACION_MS} ms) sin confirmación de GrandMA2.`
+      );
+      this.actualizarEstado('ERROR');
+      socketActivo.destroy();
+    }, ClienteTelnetMA2.TIEMPO_ESPERA_AUTENTICACION_MS);
+  }
+
+  private cancelarTemporizadorAutenticacion(): void {
+    if (this.temporizadorAutenticacion !== null) {
+      clearTimeout(this.temporizadorAutenticacion);
+      this.temporizadorAutenticacion = null;
+    }
+  }
+
   private cancelarTemporizadorReconexion(): void {
     if (this.temporizadorReconexion !== null) {
       clearTimeout(this.temporizadorReconexion);
@@ -360,6 +416,7 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
   }
 
   private limpiarSocketActual(): void {
+    this.cancelarTemporizadorAutenticacion();
     if (this.socket === null) {
       return;
     }
