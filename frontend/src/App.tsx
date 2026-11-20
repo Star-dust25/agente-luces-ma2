@@ -8,6 +8,19 @@ import {
   type ResultadoInterpretacion,
 } from './diccionario/TraductorLuces';
 import { bloqueoDeSeguridadCompuesto } from './seguridadComandos';
+import {
+  alternarSeleccionGrupo,
+  capturarInstantaneaAfectados,
+  construirComandosColorSeleccion,
+  construirComandosIntensidadSeleccion,
+  construirComandosRestauracion,
+  esSeleccionCompleta,
+  expandirIdsGrupo,
+  formatearResumenSeleccion,
+  registrarPasoDeshacer,
+  type InstantaneaGrupo,
+  type PasoDeshacer,
+} from './servicios/operacionesCabina';
 import type {
   ComandoLuces,
   EstadoConexionMA2,
@@ -15,14 +28,6 @@ import type {
 } from './tipos/ipc';
 
 type NivelLog = 'info' | 'exito' | 'advertencia' | 'error';
-
-interface EstadoGrupo {
-  readonly id: string;
-  readonly nombre: string;
-  readonly intensidad: number;
-  readonly colorNombre: string | null;
-  readonly colorHex: string | null;
-}
 
 interface RegistroLog {
   readonly id: string;
@@ -44,6 +49,12 @@ interface ToastItem {
 type MenuContextual =
   | { readonly tipo: 'grupo'; readonly x: number; readonly y: number; readonly idGrupo: string }
   | { readonly tipo: 'log'; readonly x: number; readonly y: number; readonly idLog: string };
+
+interface OpcionesDespacho {
+  readonly textoOriginal?: string | null;
+  readonly colorOpcional?: DefinicionColorMA2;
+  readonly registrarDeshacer?: boolean;
+}
 
 const EJEMPLOS_RAPIDOS = [
   'Frontales al 70% en azul',
@@ -71,19 +82,19 @@ function etiquetaEstadoConexion(estado: EstadoConexionMA2 | 'WEB'): {
 } {
   switch (estado) {
     case 'AUTENTICADO':
-      return { texto: 'MA2 Autenticado', clase: 'badge-activo' };
+      return { texto: 'MA2 Autenticado', clase: 'badge-estado-exito' };
     case 'CONECTADO':
-      return { texto: 'TCP Conectado', clase: 'badge-sutil' };
+      return { texto: 'TCP Conectado', clase: 'badge-estado-ambar' };
     case 'CONECTANDO':
-      return { texto: 'Conectando...', clase: 'badge-sutil' };
+      return { texto: 'Conectando...', clase: 'badge-estado-ambar' };
     case 'RECONECTANDO':
-      return { texto: 'Reconectando...', clase: 'badge-sutil' };
-    case 'ERROR':
-      return { texto: 'Error Telnet', clase: 'badge-activo' };
-    case 'DESCONECTADO':
-      return { texto: 'Desconectado', clase: 'badge-sutil' };
+      return { texto: 'Reconectando...', clase: 'badge-estado-ambar' };
     case 'WEB':
-      return { texto: 'Simulador Web', clase: 'badge-sutil' };
+      return { texto: 'Simulador Web', clase: 'badge-estado-ambar' };
+    case 'ERROR':
+      return { texto: 'Error Telnet', clase: 'badge-estado-error' };
+    case 'DESCONECTADO':
+      return { texto: 'Desconectado', clase: 'badge-estado-error' };
   }
 }
 
@@ -100,8 +111,8 @@ function crearId(prefijo: string): string {
   return `${prefijo}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function inicializarGrupos(): Record<string, EstadoGrupo> {
-  const inicial: Record<string, EstadoGrupo> = {};
+function inicializarGrupos(): Record<string, InstantaneaGrupo> {
+  const inicial: Record<string, InstantaneaGrupo> = {};
   for (const g of CATALOGO_GRUPOS) {
     inicial[g.id] = {
       id: g.id,
@@ -109,24 +120,10 @@ function inicializarGrupos(): Record<string, EstadoGrupo> {
       intensidad: 0,
       colorNombre: null,
       colorHex: null,
+      colorPreset: null,
     };
   }
   return inicial;
-}
-
-function expandirGrupos(grupo: string): readonly string[] {
-  const limpio = grupo.trim().toLowerCase();
-  const rango = /^(\d+)\s+thru\s+(\d+)$/.exec(limpio);
-  if (rango !== null) {
-    const inicio = Number(rango[1]);
-    const fin = Number(rango[2]);
-    const lista: string[] = [];
-    for (let i = inicio; i <= fin; i += 1) {
-      lista.push(String(i));
-    }
-    return lista;
-  }
-  return [limpio];
 }
 
 function posicionarMenu(x: number, y: number): { left: number; top: number } {
@@ -149,8 +146,8 @@ export default function App() {
   const esElectron = typeof window !== 'undefined' && window.api !== undefined;
 
   const [orden, setOrden] = useState<string>('');
-  const [grupos, setGrupos] = useState<Record<string, EstadoGrupo>>(inicializarGrupos);
-  const [grupoActivoId, setGrupoActivoId] = useState<string>('1');
+  const [grupos, setGrupos] = useState<Record<string, InstantaneaGrupo>>(inicializarGrupos);
+  const [gruposSeleccionados, setGruposSeleccionados] = useState<readonly string[]>(['1']);
   const [valorSlider, setValorSlider] = useState<number>(0);
   const [estadoConexion, setEstadoConexion] = useState<EstadoConexionMA2 | 'WEB'>(
     esElectron ? 'CONECTANDO' : 'WEB'
@@ -161,10 +158,14 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [menu, setMenu] = useState<MenuContextual | null>(null);
   const [confirmandoBlackout, setConfirmandoBlackout] = useState<boolean>(false);
+  const [pilaDeshacer, setPilaDeshacer] = useState<readonly PasoDeshacer[]>([]);
   const [historialOrdenes, setHistorialOrdenes] = useState<readonly string[]>([]);
   const [indiceHistorial, setIndiceHistorial] = useState<number>(-1);
   const [borradorTemporal, setBorradorTemporal] = useState<string>('');
   const [sugerenciasOcultas, setSugerenciasOcultas] = useState<boolean>(false);
+
+  const gruposRef = useRef<Record<string, InstantaneaGrupo>>(grupos);
+  gruposRef.current = grupos;
 
   const timersRef = useRef<Map<string, number>>(new Map());
   const timerBlackoutRef = useRef<number | null>(null);
@@ -205,16 +206,44 @@ export default function App() {
     return TraductorLuces.generarSugerencias(orden, 3);
   }, [orden, sugerenciasOcultas]);
 
-  const seleccionarGrupo = useCallback(
-    (idGrupo: string) => {
-      setGrupoActivoId(idGrupo);
-      const grupo = grupos[idGrupo];
-      if (grupo !== undefined) {
-        setValorSlider(grupo.intensidad);
-      }
-    },
-    [grupos]
+  const resumenSeleccion = useMemo(
+    () => formatearResumenSeleccion(gruposSeleccionados, CATALOGO_GRUPOS),
+    [gruposSeleccionados]
   );
+
+  const todosSeleccionados = useMemo(
+    () => esSeleccionCompleta(gruposSeleccionados, CATALOGO_GRUPOS.length),
+    [gruposSeleccionados]
+  );
+
+  const colorActivoSeleccion = useMemo(() => {
+    if (gruposSeleccionados.length === 0) {
+      return { preset: null as string | null, nombre: null as string | null, hex: null as string | null };
+    }
+    const primero = grupos[gruposSeleccionados[0]];
+    if (primero === undefined || primero.colorPreset === null) {
+      return { preset: null, nombre: null, hex: null };
+    }
+    const todosComparten = gruposSeleccionados.every(
+      (id) => grupos[id]?.colorPreset === primero.colorPreset
+    );
+    if (!todosComparten) {
+      return { preset: null, nombre: 'Mixto', hex: null };
+    }
+    return {
+      preset: primero.colorPreset,
+      nombre: primero.colorNombre,
+      hex: primero.colorHex,
+    };
+  }, [grupos, gruposSeleccionados]);
+
+  const seleccionarGrupos = useCallback((nuevosIds: readonly string[]) => {
+    setGruposSeleccionados(nuevosIds);
+    const idReferencia = nuevosIds[0];
+    if (idReferencia !== undefined && gruposRef.current[idReferencia] !== undefined) {
+      setValorSlider(gruposRef.current[idReferencia].intensidad);
+    }
+  }, []);
 
   const lanzarToast = useCallback((nivel: NivelLog, titulo: string, detalle: string) => {
     const id = crearId('toast');
@@ -292,6 +321,47 @@ export default function App() {
     };
   }, [menu]);
 
+  // Atajos globales de teclado para cabina en vivo (sin interferir al escribir)
+  useEffect(() => {
+    const manejarAtajosGlobales = (evento: KeyboardEvent) => {
+      const objetivo = evento.target as HTMLElement | null;
+      const enCampoTexto =
+        objetivo !== null &&
+        (objetivo.tagName === 'TEXTAREA' ||
+          objetivo.tagName === 'INPUT' ||
+          objetivo.isContentEditable);
+
+      if ((evento.ctrlKey || evento.metaKey) && evento.key.toLowerCase() === 'k') {
+        evento.preventDefault();
+        inputRef.current?.focus();
+        return;
+      }
+
+      if (evento.key === '/' && !enCampoTexto && !evento.altKey && !evento.ctrlKey && !evento.metaKey) {
+        evento.preventDefault();
+        inputRef.current?.focus();
+        return;
+      }
+
+      if (evento.altKey && !evento.ctrlKey && !evento.metaKey) {
+        if (/^[1-6]$/.test(evento.key)) {
+          evento.preventDefault();
+          seleccionarGrupos([evento.key]);
+          return;
+        }
+        if (evento.key === '0') {
+          evento.preventDefault();
+          seleccionarGrupos(CATALOGO_GRUPOS.map((g) => g.id));
+        }
+      }
+    };
+
+    window.addEventListener('keydown', manejarAtajosGlobales);
+    return () => {
+      window.removeEventListener('keydown', manejarAtajosGlobales);
+    };
+  }, [seleccionarGrupos]);
+
   useEffect(() => {
     const timers = timersRef.current;
     return () => {
@@ -307,7 +377,7 @@ export default function App() {
 
   const actualizarEstadoGrupoLocal = useCallback(
     (payload: ComandoLuces, color?: DefinicionColorMA2) => {
-      const ids = expandirGrupos(payload.grupo);
+      const ids = expandirIdsGrupo(payload.grupo);
       setGrupos((prev) => {
         const copia = { ...prev };
         for (const id of ids) {
@@ -320,6 +390,7 @@ export default function App() {
               intensidad: actual.intensidad === 0 ? 100 : actual.intensidad,
               colorNombre: c?.nombre ?? `Preset ${payload.valor}`,
               colorHex: c?.hex ?? actual.colorHex,
+              colorPreset: c?.preset ?? payload.valor,
             };
           } else {
             const valorNum = Number(payload.valor);
@@ -332,24 +403,24 @@ export default function App() {
         return copia;
       });
 
-      if (ids.includes(grupoActivoId) && payload.tipo === 'intensidad') {
+      if (ids.includes(gruposSeleccionados[0]) && payload.tipo === 'intensidad') {
         const valorNum = Number(payload.valor);
         if (Number.isFinite(valorNum)) {
           setValorSlider(valorNum);
         }
       }
     },
-    [grupoActivoId]
+    [gruposSeleccionados]
   );
 
   const despacharLoteComandos = useCallback(
     async (
       comandos: readonly ComandoLuces[],
       tituloLote: string,
-      textoOriginal: string | null = null,
-      colorOpcional?: DefinicionColorMA2
+      opciones: OpcionesDespacho = {}
     ): Promise<boolean> => {
-      // Validación atómica todo o nada antes de emitir cualquier paquete por IPC.
+      const { textoOriginal = null, colorOpcional, registrarDeshacer = true } = opciones;
+
       const bloqueo = bloqueoDeSeguridadCompuesto(comandos, textoOriginal);
       if (bloqueo !== null) {
         lanzarToast('advertencia', 'Orden bloqueada', bloqueo);
@@ -363,11 +434,16 @@ export default function App() {
       const clave = JSON.stringify(comandos);
       const ahora = Date.now();
       if (
+        registrarDeshacer &&
         ultimoIntentoRef.current?.clave === clave &&
-        ahora - ultimoIntentoRef.current.instante < 600
+        ahora - ultimoIntentoRef.current.instante < 500
       ) {
         return false;
       }
+
+      const instantaneaPrevia = registrarDeshacer
+        ? capturarInstantaneaAfectados(gruposRef.current, comandos)
+        : [];
 
       ultimoIntentoRef.current = { clave, instante: ahora };
       enviandoRef.current = true;
@@ -413,7 +489,7 @@ export default function App() {
               break;
             }
           } else {
-            await new Promise<void>((r) => window.setTimeout(r, 150));
+            await new Promise<void>((r) => window.setTimeout(r, 140));
             actualizarEstadoGrupoLocal(payload, colorOpcional);
             sintaxisEnviadas.push(sintaxisEsperada);
             registrarLog({
@@ -427,6 +503,16 @@ export default function App() {
         }
 
         if (!falloEnvio && sintaxisEnviadas.length > 0) {
+          if (registrarDeshacer && instantaneaPrevia.length > 0) {
+            setPilaDeshacer((prev) =>
+              registrarPasoDeshacer(prev, {
+                id: crearId('undo'),
+                etiqueta: tituloLote,
+                estadosPrevios: instantaneaPrevia,
+              })
+            );
+          }
+
           const resumen = sintaxisEnviadas.join(' · ');
           if (window.api !== undefined) {
             lanzarToast('exito', tituloLote, resumen);
@@ -457,11 +543,9 @@ export default function App() {
         ? `${res.etiquetaAccion} (${res.comandosPayload.length})`
         : `${res.etiquetaAccion} · ${res.etiquetaGrupo}`;
 
-    const exitoEnvio = await despacharLoteComandos(
-      res.comandosPayload,
-      titulo,
-      res.textoOriginal
-    );
+    const exitoEnvio = await despacharLoteComandos(res.comandosPayload, titulo, {
+      textoOriginal: res.textoOriginal,
+    });
 
     if (exitoEnvio && res.textoOriginal.length > 0) {
       setHistorialOrdenes((prev) => {
@@ -482,35 +566,98 @@ export default function App() {
       const nombre = g?.nombre ?? `Grupo ${idGrupo}`;
       const accion = porcentaje === 0 ? 'apagar' : porcentaje === 100 ? 'encender' : 'ajustar';
 
-      if (idGrupo !== '1 thru 6') {
-        setGrupoActivoId(idGrupo);
+      if (idGrupo !== '1 thru 6' && gruposSeleccionados.length === 1 && gruposSeleccionados[0] === idGrupo) {
         setValorSlider(porcentaje);
       }
 
       await despacharLoteComandos(
         [{ accion, grupo: idGrupo, valor: String(porcentaje), tipo: 'intensidad' }],
         `${nombre} al ${porcentaje}%`,
-        `${nombre} al ${porcentaje}%`
+        { textoOriginal: `${nombre} al ${porcentaje}%` }
       );
     },
-    [despacharLoteComandos, grupos]
+    [despacharLoteComandos, grupos, gruposSeleccionados]
+  );
+
+  const aplicarIntensidadSeleccion = useCallback(
+    async (porcentaje: number) => {
+      const comandos = construirComandosIntensidadSeleccion(
+        gruposSeleccionados,
+        porcentaje,
+        CATALOGO_GRUPOS.length
+      );
+      setValorSlider(porcentaje);
+      await despacharLoteComandos(comandos, `${resumenSeleccion.titulo} al ${porcentaje}%`, {
+        textoOriginal: `${resumenSeleccion.titulo} al ${porcentaje}%`,
+      });
+    },
+    [despacharLoteComandos, gruposSeleccionados, resumenSeleccion.titulo]
+  );
+
+  const aplicarColorSeleccion = useCallback(
+    async (color: DefinicionColorMA2) => {
+      const comandos = construirComandosColorSeleccion(
+        gruposSeleccionados,
+        color.preset,
+        CATALOGO_GRUPOS.length
+      );
+      await despacharLoteComandos(comandos, `${resumenSeleccion.titulo} · ${color.nombre}`, {
+        textoOriginal: `Poner ${resumenSeleccion.titulo.toLowerCase()} en ${color.nombre.toLowerCase()}`,
+        colorOpcional: color,
+      });
+    },
+    [despacharLoteComandos, gruposSeleccionados, resumenSeleccion.titulo]
   );
 
   const colorRapidoGrupo = useCallback(
     async (idGrupo: string, color: DefinicionColorMA2) => {
       const g = grupos[idGrupo];
       const nombre = g?.nombre ?? `Grupo ${idGrupo}`;
-      setGrupoActivoId(idGrupo);
-
       await despacharLoteComandos(
         [{ accion: 'color', grupo: idGrupo, valor: color.preset, tipo: 'color' }],
         `${nombre} · ${color.nombre}`,
-        `Poner ${nombre.toLowerCase()} en ${color.nombre.toLowerCase()}`,
-        color
+        {
+          textoOriginal: `Poner ${nombre.toLowerCase()} en ${color.nombre.toLowerCase()}`,
+          colorOpcional: color,
+        }
       );
     },
     [despacharLoteComandos, grupos]
   );
+
+  const ejecutarDeshacer = useCallback(async () => {
+    if (pilaDeshacer.length === 0 || enviandoRef.current) {
+      return;
+    }
+
+    const [ultimoPaso, ...restoPila] = pilaDeshacer;
+    const comandosRestauracion = construirComandosRestauracion(ultimoPaso.estadosPrevios);
+
+    const exito = await despacharLoteComandos(
+      comandosRestauracion,
+      `Deshacer · ${ultimoPaso.etiqueta}`,
+      { registrarDeshacer: false }
+    );
+
+    if (exito) {
+      setGrupos((prev) => {
+        const copia = { ...prev };
+        for (const estadoPrevio of ultimoPaso.estadosPrevios) {
+          copia[estadoPrevio.id] = { ...estadoPrevio };
+        }
+        return copia;
+      });
+
+      const primeroSeleccionado = ultimoPaso.estadosPrevios.find(
+        (e) => e.id === gruposSeleccionados[0]
+      );
+      if (primeroSeleccionado !== undefined) {
+        setValorSlider(primeroSeleccionado.intensidad);
+      }
+
+      setPilaDeshacer(restoPila);
+    }
+  }, [despacharLoteComandos, gruposSeleccionados, pilaDeshacer]);
 
   const copiarTexto = useCallback(
     async (texto: string) => {
@@ -527,7 +674,7 @@ export default function App() {
   const abrirMenuGrupo = (e: ReactMouseEvent<HTMLElement>, idGrupo: string) => {
     e.preventDefault();
     e.stopPropagation();
-    seleccionarGrupo(idGrupo);
+    seleccionarGrupos([idGrupo]);
     setMenu({ tipo: 'grupo', x: e.clientX, y: e.clientY, idGrupo });
   };
 
@@ -614,11 +761,15 @@ export default function App() {
     void accionRapidaGrupo('1 thru 6', 0);
   }, [accionRapidaGrupo, confirmandoBlackout, lanzarToast]);
 
-  const grupoActivo = grupos[grupoActivoId] ?? grupos['1'];
   const grupoEnMenu = menu?.tipo === 'grupo' ? grupos[menu.idGrupo] : undefined;
   const logEnMenu =
     menu?.tipo === 'log' ? logs.find((item) => item.id === menu.idLog) : undefined;
   const infoEstado = etiquetaEstadoConexion(estadoConexion);
+  const colorRellenoSlider = colorActivoSeleccion.hex ?? '#e61e32';
+  const estiloSlider = {
+    '--porcentaje-slider': `${valorSlider}%`,
+    '--color-relleno-slider': colorRellenoSlider,
+  } as React.CSSProperties;
 
   return (
     <div className="lienzo">
@@ -667,133 +818,183 @@ export default function App() {
           </div>
         </header>
 
-        {/* Tira de grupos: 1 clic selecciona, doble clic o toque en badge alterna 0% / 100% */}
+        {/* Tira de grupos G1–G6 + Todos con monitor visual */}
         <section className="tira-grupos" aria-label="Grupos de luces">
           {cargando
-            ? Array.from({ length: 6 }).map((_, i) => (
+            ? Array.from({ length: 7 }).map((_, i) => (
                 <div key={i} className="pastilla-grupo glass" aria-hidden="true">
                   <span className="skeleton skeleton-linea" />
                 </div>
               ))
-            : CATALOGO_GRUPOS.map((g) => {
-                const estado = grupos[g.id];
-                const encendido = (estado?.intensidad ?? 0) > 0;
-                const seleccionado = grupoActivoId === g.id;
+            : (
+                <>
+                  {CATALOGO_GRUPOS.map((g) => {
+                    const estado = grupos[g.id];
+                    const intensidad = estado?.intensidad ?? 0;
+                    const encendido = intensidad > 0;
+                    const seleccionado = gruposSeleccionados.includes(g.id);
+                    const colorMonitor = estado?.colorHex ?? '#e61e32';
 
-                return (
-                  <div
-                    key={g.id}
-                    className={`pastilla-grupo glass${encendido ? ' encendido' : ''}${seleccionado ? ' seleccionada' : ''}`}
-                    onClick={() => seleccionarGrupo(g.id)}
-                    onDoubleClick={() => void accionRapidaGrupo(g.id, encendido ? 0 : 100)}
-                    onContextMenu={(e) => abrirMenuGrupo(e, g.id)}
-                    role="button"
-                    tabIndex={0}
-                    title="Clic: seleccionar grupo · Doble clic o badge: alternar 0% / 100% · Clic derecho: menú"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        seleccionarGrupo(g.id);
-                      }
-                    }}
-                  >
-                    <div className="pastilla-info">
-                      <span className="pastilla-id">G{g.id}</span>
-                      <span className="pastilla-nombre">{g.nombre}</span>
-                    </div>
-                    <div className="pastilla-meta">
-                      <button
-                        type="button"
-                        className={`badge badge-toggle ${encendido ? 'badge-activo' : 'badge-sutil'}`}
-                        title={`Alternar ${g.nombre} entre 0% y 100%`}
+                    return (
+                      <div
+                        key={g.id}
+                        className={`pastilla-grupo glass${encendido ? ' encendido' : ''}${seleccionado ? ' seleccionada' : ''}`}
                         onClick={(e) => {
-                          e.stopPropagation();
-                          void accionRapidaGrupo(g.id, encendido ? 0 : 100);
+                          const multiseleccion = e.ctrlKey || e.metaKey;
+                          seleccionarGrupos(
+                            alternarSeleccionGrupo(gruposSeleccionados, g.id, multiseleccion)
+                          );
+                        }}
+                        onDoubleClick={() => void accionRapidaGrupo(g.id, encendido ? 0 : 100)}
+                        onContextMenu={(e) => abrirMenuGrupo(e, g.id)}
+                        role="button"
+                        tabIndex={0}
+                        title="Clic: seleccionar · Ctrl+Clic: multi-selección · Doble clic o %: alternar 0% / 100%"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            seleccionarGrupos(
+                              alternarSeleccionGrupo(
+                                gruposSeleccionados,
+                                g.id,
+                                e.ctrlKey || e.metaKey
+                              )
+                            );
+                          }
                         }}
                       >
-                        {estado?.intensidad ?? 0}%
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-icono"
-                        aria-label={`Menú de ${g.nombre}`}
-                        onClick={(e) => abrirMenuGrupo(e, g.id)}
-                      >
-                        ⋮
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                        <div className="pastilla-fila-superior">
+                          <span className="pastilla-id">G{g.id}</span>
+                          <div className="pastilla-indicadores">
+                            {estado?.colorHex !== null && estado?.colorHex !== undefined && (
+                              <span
+                                className="pastilla-punto-color"
+                                style={{ backgroundColor: estado.colorHex }}
+                                title={estado.colorNombre ?? 'Color aplicado'}
+                              />
+                            )}
+                            <button
+                              type="button"
+                              className={`badge badge-toggle ${encendido ? 'badge-activo' : 'badge-sutil'}`}
+                              title={`Alternar ${g.nombre} entre 0% y 100%`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void accionRapidaGrupo(g.id, encendido ? 0 : 100);
+                              }}
+                            >
+                              {intensidad}%
+                            </button>
+                          </div>
+                        </div>
+
+                        <span className="pastilla-nombre">{g.nombre}</span>
+
+                        <span className="pastilla-monitor-pista" aria-hidden="true">
+                          <span
+                            className="pastilla-monitor-barra"
+                            style={{
+                              width: `${intensidad}%`,
+                              backgroundColor: colorMonitor,
+                            }}
+                          />
+                        </span>
+                      </div>
+                    );
+                  })}
+
+                  <button
+                    type="button"
+                    className={`pastilla-grupo pastilla-todos glass${todosSeleccionados ? ' seleccionada' : ''}`}
+                    onClick={() => seleccionarGrupos(CATALOGO_GRUPOS.map((g) => g.id))}
+                    title="Seleccionar todos los grupos G1–G6 (Alt + 0)"
+                  >
+                    <span className="pastilla-id">G1–G6</span>
+                    <span className="pastilla-nombre">Todos</span>
+                  </button>
+                </>
+              )}
         </section>
 
-        {/* Barra contextual de control rápido a 1 clic vinculada al grupo activo */}
-        <section className="barra-control-rapido glass" aria-label="Control rápido del grupo activo">
+        {/* Barra contextual de control rápido a 1 clic vinculada a la selección */}
+        <section className="barra-control-rapido glass" aria-label="Control rápido de selección">
           <div className="control-grupo-etiqueta">
-            <span className="badge badge-activo">G{grupoActivo?.id}</span>
-            <span className="control-grupo-nombre">{grupoActivo?.nombre}</span>
+            <span className="badge badge-activo">{resumenSeleccion.badge}</span>
+            <span className="control-grupo-nombre">{resumenSeleccion.titulo}</span>
           </div>
 
           <div className="control-intensidades" role="group" aria-label="Niveles rápidos">
-            {NIVELES_RAPIDOS.map((nivel) => (
-              <button
-                key={nivel}
-                type="button"
-                className={`chip-nivel${grupoActivo?.intensidad === nivel ? ' activo' : ''}`}
-                disabled={enviando}
-                onClick={() => void accionRapidaGrupo(grupoActivoId, nivel)}
-              >
-                {nivel}%
-              </button>
-            ))}
+            {NIVELES_RAPIDOS.map((nivel) => {
+              const nivelCoincide =
+                gruposSeleccionados.length > 0 &&
+                gruposSeleccionados.every((id) => grupos[id]?.intensidad === nivel);
+              return (
+                <button
+                  key={nivel}
+                  type="button"
+                  className={`chip-nivel${nivelCoincide ? ' activo' : ''}`}
+                  disabled={enviando}
+                  onClick={() => void aplicarIntensidadSeleccion(nivel)}
+                >
+                  {nivel}%
+                </button>
+              );
+            })}
           </div>
 
           <div className="control-slider">
             <input
               type="range"
               className="slider-carmesi"
+              style={estiloSlider}
               min={0}
               max={100}
               step={1}
               value={valorSlider}
-              aria-label={`Intensidad de ${grupoActivo?.nombre}`}
+              aria-label={`Intensidad de ${resumenSeleccion.titulo}`}
               onChange={(e) => setValorSlider(Number(e.target.value))}
-              onPointerUp={() => void accionRapidaGrupo(grupoActivoId, valorSlider)}
+              onPointerUp={() => void aplicarIntensidadSeleccion(valorSlider)}
               onKeyUp={(e) => {
                 if (TECLAS_SLIDER_CONFIRMACION.has(e.key)) {
-                  void accionRapidaGrupo(grupoActivoId, valorSlider);
+                  void aplicarIntensidadSeleccion(valorSlider);
                 }
               }}
             />
             <span className="slider-valor">{valorSlider}%</span>
           </div>
 
-          <div className="control-colores" role="group" aria-label="Colores RF-05">
-            {CATALOGO_COLORES.map((color) => {
-              const colorActivo = grupoActivo?.colorNombre === color.nombre;
-              return (
-                <button
-                  key={color.id}
-                  type="button"
-                  className={`punto-color-rapido${colorActivo ? ' activo' : ''}`}
-                  style={{ backgroundColor: color.hex }}
-                  title={`${color.nombre} (${color.preset})`}
-                  aria-label={`Aplicar ${color.nombre} a ${grupoActivo?.nombre}`}
-                  disabled={enviando}
-                  onClick={() => void colorRapidoGrupo(grupoActivoId, color)}
-                />
-              );
-            })}
+          <div className="control-colores-contenedor">
+            <div className="control-colores" role="group" aria-label="Colores RF-05">
+              {CATALOGO_COLORES.map((color) => {
+                const colorActivo = colorActivoSeleccion.preset === color.preset;
+                return (
+                  <button
+                    key={color.id}
+                    type="button"
+                    className={`punto-color-rapido${colorActivo ? ' activo' : ''}`}
+                    style={{ backgroundColor: color.hex }}
+                    title={`${color.nombre} (${color.preset})`}
+                    aria-label={`Aplicar ${color.nombre} a ${resumenSeleccion.titulo}`}
+                    disabled={enviando}
+                    onClick={() => void aplicarColorSeleccion(color)}
+                  />
+                );
+              })}
+            </div>
+            <span className="color-activo-etiqueta">
+              {colorActivoSeleccion.nombre ?? 'Sin color'}
+            </span>
           </div>
         </section>
 
-        {/* Área principal de 2 columnas limpia */}
+        {/* Área principal de 2 columnas */}
         <main className="espacio-principal">
-          {/* Columna izquierda: Consola */}
+          {/* Columna izquierda: Orden de Iluminación */}
           <section className="panel glass">
             <div className="panel-titulo">
               <h2>Orden de Iluminación</h2>
-              <span className="texto-gris">Enter ejecuta · ↑↓ historial · Esc limpia</span>
+              <span className="texto-gris" title="Atajos globales disponibles">
+                Alt+1..6 grupo · Alt+0 todos · Ctrl+K / / enfocar
+              </span>
             </div>
 
             <div className="campo-contenedor">
@@ -811,30 +1012,34 @@ export default function App() {
                 aria-label="Instrucción de iluminación"
               />
 
-              <div className="chips-ejemplos">
-                {sugerenciasActivas.length > 0
-                  ? sugerenciasActivas.map((sugerencia, idx) => (
-                      <button
-                        key={sugerencia}
-                        type="button"
-                        className={`chip${idx === 0 ? ' chip-sugerida' : ''}`}
-                        onClick={() => aplicarSugerencia(sugerencia)}
-                      >
-                        {idx === 0 && <span className="atajo-tab">Tab</span>}
-                        {sugerencia}
-                      </button>
-                    ))
-                  : EJEMPLOS_RAPIDOS.map((ejemplo) => (
-                      <button
-                        key={ejemplo}
-                        type="button"
-                        className="chip"
-                        onClick={() => aplicarSugerencia(ejemplo)}
-                      >
-                        {ejemplo}
-                      </button>
-                    ))}
-              </div>
+              {sugerenciasActivas.length > 0 ? (
+                <div className="chips-sugerencias">
+                  {sugerenciasActivas.map((sugerencia, idx) => (
+                    <button
+                      key={sugerencia}
+                      type="button"
+                      className={`chip${idx === 0 ? ' chip-sugerida' : ''}`}
+                      onClick={() => aplicarSugerencia(sugerencia)}
+                    >
+                      {idx === 0 && <span className="atajo-tab">Tab</span>}
+                      <span>{sugerencia}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="chips-ejemplos">
+                  {EJEMPLOS_RAPIDOS.map((ejemplo) => (
+                    <button
+                      key={ejemplo}
+                      type="button"
+                      className="chip chip-cuadricula"
+                      onClick={() => aplicarSugerencia(ejemplo)}
+                    >
+                      {ejemplo}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="barra-inferior-consola">
@@ -881,21 +1086,34 @@ export default function App() {
             </div>
           </section>
 
-          {/* Columna derecha: Bitácora limpia */}
+          {/* Columna derecha: Bitácora */}
           <section className="panel glass">
             <div className="panel-titulo">
               <h2>Actividad</h2>
               <div className="meta-derecha">
                 <span className="badge badge-sutil">{logs.length}</span>
-                {logs.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn-fantasma"
-                    onClick={() => setLogs([])}
-                  >
-                    Vaciar
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn-fantasma"
+                  disabled={pilaDeshacer.length === 0 || enviando}
+                  onClick={() => void ejecutarDeshacer()}
+                  title={
+                    pilaDeshacer.length > 0
+                      ? `Deshacer: ${pilaDeshacer[0].etiqueta}`
+                      : 'No hay acciones recientes para deshacer'
+                  }
+                >
+                  Deshacer
+                </button>
+                <button
+                  type="button"
+                  className="btn-fantasma"
+                  disabled={logs.length === 0}
+                  onClick={() => setLogs([])}
+                  title="Vaciar lista visual de logs"
+                >
+                  Limpiar
+                </button>
               </div>
             </div>
 
@@ -1025,7 +1243,7 @@ export default function App() {
                     const titulo = logEnMenu.titulo;
                     const orig = logEnMenu.textoOriginal;
                     setMenu(null);
-                    void despacharLoteComandos(lote, titulo, orig);
+                    void despacharLoteComandos(lote, titulo, { textoOriginal: orig });
                   }}
                 >
                   Reenviar comando
