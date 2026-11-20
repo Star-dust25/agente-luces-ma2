@@ -243,7 +243,7 @@ export class ServicioVozLocal implements IServicioVozLocal {
           if (porcentaje >= ultimoPorcentajeReportado + 15 || porcentaje === 100) {
             ultimoPorcentajeReportado = porcentaje;
             this.notificarProgreso(
-              `Descargando modelo offline (${info.file}): ${porcentaje}%`
+              `Cargando recurso del modelo (${info.file}): ${porcentaje}%`
             );
           }
         } else if (info.status === 'ready') {

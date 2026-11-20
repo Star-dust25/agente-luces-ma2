@@ -243,7 +243,7 @@ export class TraductorLuces {
     if (configuracion.grupos !== undefined && configuracion.grupos.length > 0) {
       TraductorLuces.gruposActivos = configuracion.grupos;
     }
-    if (configuracion.colores !== undefined && configuracion.colores.length > 0) {
+    if (configuracion.colores !== undefined) {
       TraductorLuces.coloresActivos = configuracion.colores;
     }
     if (

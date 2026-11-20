@@ -220,8 +220,8 @@ class ControladorPrincipalMA2 {
         );
       }
 
-      console.info(`[Main -> MA2] Comando ejecutado: ${comandoMA2.trim()}`);
-      return this.crearRespuesta(true, comandoMA2, 'Comando enviado correctamente a GrandMA2.');
+      console.info(`[Main -> MA2] Comando entregado al socket: ${comandoMA2.trim()}`);
+      return this.crearRespuesta(true, comandoMA2, 'Comando entregado a Telnet; ejecución física no confirmada.');
     } catch (error: unknown) {
       const detalle = error instanceof Error ? error.message : String(error);
       console.error(`[Main] Error al procesar comando IPC: ${detalle}`);

@@ -70,6 +70,12 @@ try {
       tema: 'cabina',
       autoEjecutarVoz: false,
     },
+    grupos: leidaDesdePlantilla.grupos.map((grupo) =>
+      grupo.id === '1' ? { ...grupo, nombre: 'Proscenio', sinonimos: ['proscenio'] } : grupo
+    ),
+    colores: leidaDesdePlantilla.colores.map((color) =>
+      color.id === 'rojo' ? { ...color, nombre: 'Rojo QA', preset: '4.12', hex: '#cc2233' } : color
+    ),
   };
   const guardada = gestorSembrado.guardarConfiguracion(nuevaConfig);
   assert.equal(guardada.conexion.host, '10.0.0.12');
@@ -81,6 +87,10 @@ try {
   assert.equal(recargada.conexion.usuario, 'iluminacion');
   assert.equal(recargada.executorPorDefecto, 12);
   assert.equal(recargada.interfaz.tema, 'cabina');
+  assert.equal(recargada.grupos[0].nombre, 'Proscenio');
+  assert.deepEqual(recargada.grupos[0].sinonimos, ['proscenio']);
+  assert.equal(recargada.colores.find((color) => color.id === 'rojo').preset, '4.12');
+  assert.equal(recargada.colores.find((color) => color.id === 'rojo').hex, '#cc2233');
 
   // 4. Rechazar configuración inválida (puerto fuera de rango, executor inválido, inyección)
   assert.equal(esConfiguracionSistemaValida(null), false);
@@ -114,6 +124,24 @@ try {
         ...structuredClone(nuevaConfig),
         interfaz: { tema: 'neón', autoEjecutarVoz: false },
       }),
+    /esquema válido/i
+  );
+  assert.throws(
+    () => gestorSembrado.guardarConfiguracion({
+      ...structuredClone(nuevaConfig),
+      colores: nuevaConfig.colores.map((color) =>
+        color.id === 'rojo' ? { ...color, hex: 'rojo' } : color
+      ),
+    }),
+    /esquema válido/i
+  );
+  assert.throws(
+    () => gestorSembrado.guardarConfiguracion({
+      ...structuredClone(nuevaConfig),
+      colores: nuevaConfig.colores.map((color) =>
+        color.id === 'rojo' ? { ...color, preset: '5.1' } : color
+      ),
+    }),
     /esquema válido/i
   );
 

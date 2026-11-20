@@ -149,6 +149,8 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
 
     this.cancelarTemporizadorReconexion();
     this.cancelarTemporizadorAutenticacion();
+    // Una orden pendiente para la sesión anterior no debe llegar a otro destino tras reconectar.
+    this.vaciarColaConFallo();
     this.limpiarSocketActual();
     this.intentosReconexion = 0;
     this.loginEnviado = false;
@@ -364,6 +366,8 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
     this.cancelarTemporizadorAutenticacion();
     this.socket = null;
     this.loginEnviado = false;
+    // Descarta órdenes aceptadas antes del corte para evitar ejecución tardía inesperada.
+    this.vaciarColaConFallo();
 
     if (this.cierreIntencional) {
       this.actualizarEstado('DESCONECTADO');

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ModalAjustes } from './componentes/ModalAjustes';
+import { RuedaColores } from './componentes/RuedaColores';
 import {
   CATALOGO_COLORES,
   CATALOGO_GRUPOS,
@@ -189,6 +190,7 @@ export default function App() {
     CONFIGURACION_POR_DEFECTO_UI
   );
   const [modalAjustesAbierto, setModalAjustesAbierto] = useState<boolean>(false);
+  const [ruedaAbierta, setRuedaAbierta] = useState<boolean>(false);
   const [guardandoAjustes, setGuardandoAjustes] = useState<boolean>(false);
 
   const [orden, setOrden] = useState<string>('');
@@ -230,6 +232,7 @@ export default function App() {
   const timersRef = useRef<Map<string, number>>(new Map());
   const timerBlackoutRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const botonRuedaRef = useRef<HTMLButtonElement | null>(null);
   const enviandoRef = useRef(false);
   const ultimoIntentoRef = useRef<{ clave: string; instante: number } | null>(null);
 
@@ -428,7 +431,6 @@ export default function App() {
               configuracionRef.current.colores.find((item) => item.preset === payload.valor);
             copia[id] = {
               ...actual,
-              intensidad: actual.intensidad === 0 ? 100 : actual.intensidad,
               colorNombre: c?.nombre ?? `Preset ${payload.valor}`,
               colorHex: c?.hex ?? actual.colorHex,
               colorPreset: c?.preset ?? payload.valor,
@@ -505,7 +507,21 @@ export default function App() {
               : tituloLote;
 
           if (window.api !== undefined) {
-            const respuesta: RespuestaComandoIPC = await window.api.enviarComandoLuces(payload);
+            let respuesta: RespuestaComandoIPC;
+            try {
+              respuesta = await window.api.enviarComandoLuces(payload);
+            } catch (error) {
+              falloEnvio = true;
+              registrarLog({
+                nivel: 'error',
+                titulo: `Error · ${etiquetaPaso}`,
+                sintaxisMA2: sintaxisEsperada,
+                comandosPayload: [payload],
+                textoOriginal,
+              });
+              lanzarToast('error', 'No enviado a MA2', error instanceof Error ? error.message : String(error));
+              break;
+            }
             setEstadoConexion(respuesta.estadoConexion);
             const comandoFinal = respuesta.comandoGenerado?.trim() ?? sintaxisEsperada;
 
@@ -513,8 +529,8 @@ export default function App() {
               actualizarEstadoGrupoLocal(payload, colorOpcional);
               sintaxisEnviadas.push(comandoFinal);
               registrarLog({
-                nivel: 'exito',
-                titulo: etiquetaPaso,
+                nivel: 'info',
+                titulo: `Enviado a MA2 · ${etiquetaPaso}`,
                 sintaxisMA2: comandoFinal,
                 comandosPayload: [payload],
                 textoOriginal,
@@ -545,20 +561,28 @@ export default function App() {
           }
         }
 
-        if (!falloEnvio && sintaxisEnviadas.length > 0) {
-          if (registrarDeshacer && instantaneaPrevia.length > 0) {
+        if (sintaxisEnviadas.length > 0) {
+          const idsEnviados = new Set(
+            comandos.slice(0, sintaxisEnviadas.length).flatMap((comando) =>
+              comando.tipo === 'cue' ? [] : expandirIdsGrupo(comando.grupo)
+            )
+          );
+          const instantaneaEnviada = instantaneaPrevia.filter((grupo) => idsEnviados.has(grupo.id));
+          if (registrarDeshacer && instantaneaEnviada.length > 0) {
             setPilaDeshacer((prev) =>
               registrarPasoDeshacer(prev, {
                 id: crearId('undo'),
                 etiqueta: tituloLote,
-                estadosPrevios: instantaneaPrevia,
+                estadosPrevios: instantaneaEnviada,
               })
             );
           }
 
           const resumen = sintaxisEnviadas.join(' · ');
-          if (window.api !== undefined) {
-            lanzarToast('exito', tituloLote, resumen);
+          if (falloEnvio) {
+            lanzarToast('advertencia', 'Envío parcial', `${resumen} · Deshacer disponible para los grupos enviados.`);
+          } else if (window.api !== undefined) {
+            lanzarToast('info', `${tituloLote} · enviado a MA2`, `${resumen} · Sin confirmación física del resultado.`);
           } else {
             lanzarToast('info', `${tituloLote} (Web)`, resumen);
           }
@@ -828,7 +852,7 @@ export default function App() {
         color.preset,
         catalogoGruposActual.length
       );
-      await despacharLoteComandos(comandos, `${resumenSeleccion.titulo} · ${color.nombre}`, {
+      return despacharLoteComandos(comandos, `${resumenSeleccion.titulo} · ${color.nombre}`, {
         textoOriginal: `Poner ${resumenSeleccion.titulo.toLowerCase()} en ${color.nombre.toLowerCase()}`,
         colorOpcional: color,
       });
@@ -1274,6 +1298,36 @@ export default function App() {
             <span className="color-activo-etiqueta">
               {colorActivoSeleccion.nombre ?? 'Sin color'}
             </span>
+            <div className="rueda-anclaje">
+              <button
+                ref={botonRuedaRef}
+                type="button"
+                className={`chip-nivel rueda-abrir${ruedaAbierta ? ' activo' : ''}`}
+                aria-expanded={ruedaAbierta}
+                aria-haspopup="dialog"
+                aria-controls={ruedaAbierta ? 'rueda-colores-panel' : undefined}
+                aria-label="Abrir selector circular de colores"
+                onClick={() => setRuedaAbierta((abierta) => !abierta)}
+              >
+                Rueda
+              </button>
+              {ruedaAbierta && (
+                <RuedaColores
+                  ancla={botonRuedaRef.current}
+                  tema={configuracion.interfaz.tema}
+                  colores={catalogoColoresActual}
+                  colorInicial={colorActivoSeleccion.hex}
+                  gruposDestino={resumenSeleccion.titulo}
+                  disponible={!enviando && gruposSeleccionados.length > 0 && (estadoConexion === 'AUTENTICADO' || estadoConexion === 'WEB')}
+                  motivoNoDisponible={enviando ? 'Hay un envío en curso.' : 'Conecta y autentica MA2 para aplicar el preset.'}
+                  alAplicar={aplicarColorSeleccion}
+                  alCerrar={(motivo) => {
+                    setRuedaAbierta(false);
+                    if (motivo !== 'fuera') botonRuedaRef.current?.focus();
+                  }}
+                />
+              )}
+            </div>
           </div>
         </section>
 

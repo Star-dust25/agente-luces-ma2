@@ -96,7 +96,7 @@ export function ModalAjustes({
 
   const actualizarColor = (
     id: string,
-    campo: 'nombre' | 'preset' | 'sinonimosTexto',
+    campo: 'nombre' | 'preset' | 'hex' | 'sinonimosTexto',
     valor: string
   ) => {
     setColoresEditables((prev) =>
@@ -149,8 +149,8 @@ export function ModalAjustes({
     for (let i = 0; i < coloresEditables.length; i += 1) {
       const c = coloresEditables[i];
       const presetLimpio = c.preset.trim();
-      if (c.nombre.trim().length === 0 || !/^(?:4\.)?[1-9]\d?$/.test(presetLimpio)) {
-        setErrorValidacion(`Revisa el nombre o preset de color (${c.nombre || c.id}).`);
+      if (c.nombre.trim().length === 0 || !/^(?:4\.)?[1-9]\d?$/.test(presetLimpio) || !/^#[0-9a-f]{6}$/i.test(c.hex.trim())) {
+        setErrorValidacion(`Revisa el nombre, preset o HEX de color (${c.nombre || c.id}).`);
         setPestana('colores');
         return;
       }
@@ -158,7 +158,7 @@ export function ModalAjustes({
         id: c.id,
         nombre: c.nombre.trim(),
         preset: presetLimpio.includes('.') ? presetLimpio : `4.${presetLimpio}`,
-        hex: c.hex,
+        hex: c.hex.trim(),
         sinonimos: convertirTextoALista(
           c.sinonimosTexto,
           configuracionActual.colores[i]?.sinonimos ?? [c.id]
@@ -364,6 +364,12 @@ export function ModalAjustes({
                     value={c.preset}
                     onChange={(e) => actualizarColor(c.id, 'preset', e.target.value)}
                     aria-label={`Preset de color ${c.nombre}`}
+                  />
+                  <input
+                    type="text"
+                    value={c.hex}
+                    onChange={(e) => actualizarColor(c.id, 'hex', e.target.value)}
+                    aria-label={`HEX del color ${c.nombre}`}
                   />
                   <input
                     type="text"

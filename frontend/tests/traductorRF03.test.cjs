@@ -363,6 +363,11 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
   const cueInvalido = TraductorLuces.interpretarOrden('ir a escena 0');
   assert.equal(cueInvalido.exito, false);
 
+  // Una salida ASR sin instrucción de luces no puede producir un payload ejecutable.
+  const ruidoTranscrito = TraductorLuces.interpretarOrden('¡Pero!');
+  assert.equal(ruidoTranscrito.exito, false);
+  assert.equal(ruidoTranscrito.comandosPayload.length, 0);
+
   const compuestaMixta = TraductorLuces.interpretarOrden('frontales al 50% y siguiente escena');
   assert.equal(compuestaMixta.exito, true);
   assert.deepEqual(compuestaMixta.sintaxisListaMA2, ['Group 1 At 50', 'Go Executor 1']);
@@ -386,6 +391,17 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
   const grupoAliasNuevo = TraductorLuces.interpretarOrden('proscenio al 60%');
   assert.equal(grupoAliasNuevo.exito, true);
   assert.equal(grupoAliasNuevo.sintaxisMA2, 'Group 1 At 60');
+
+  TraductorLuces.configurarCatalogoDinamico({
+    colores: [{
+      id: 'rojo-qa', nombre: 'Rojo QA', preset: '4.12', hex: '#cc2233',
+      sinonimos: ['carmesiqa'],
+    }],
+  });
+  const colorActualizado = TraductorLuces.interpretarOrden('proscenio en carmesiqa');
+  assert.equal(colorActualizado.exito, true);
+  assert.equal(colorActualizado.sintaxisMA2, 'Group 1 At Preset 4.12');
+  assert.equal(colorActualizado.colorHex, '#cc2233');
 
   TraductorLuces.restablecerCatalogoPorDefecto();
   console.log('  ✓ 8. Control de Cues (RF-07) y catálogo dinámico config.json: correcto');
