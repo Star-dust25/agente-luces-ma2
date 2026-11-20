@@ -154,6 +154,30 @@ export function bloqueoDeSeguridad(
 }
 
 /**
+ * Evalúa atómicamente una lista de comandos compuestos (regla todo o nada):
+ * si cualquier sub-comando falla validación o contiene inyección, rechaza todo el bloque.
+ */
+export function bloqueoDeSeguridadCompuesto(
+  comandos: readonly ComandoLuces[],
+  ordenOriginal: string | null = null
+): string | null {
+  if (!Array.isArray(comandos) || comandos.length === 0) {
+    return 'No hay comandos válidos para ejecutar.';
+  }
+
+  for (let indice = 0; indice < comandos.length; indice += 1) {
+    const errorSubcomando = bloqueoDeSeguridad(comandos[indice], ordenOriginal);
+    if (errorSubcomando !== null) {
+      return comandos.length > 1
+        ? `Sub-comando ${indice + 1} bloqueado: ${errorSubcomando}`
+        : errorSubcomando;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Función utilitaria para verificar si un comando cumple con todas las políticas de seguridad.
  */
 export function esComandoSeguro(

@@ -7,7 +7,7 @@ import {
   type DefinicionColorMA2,
   type ResultadoInterpretacion,
 } from './diccionario/TraductorLuces';
-import { bloqueoDeSeguridad } from './seguridadComandos';
+import { bloqueoDeSeguridadCompuesto } from './seguridadComandos';
 import type {
   ComandoLuces,
   EstadoConexionMA2,
@@ -21,6 +21,7 @@ interface EstadoGrupo {
   readonly nombre: string;
   readonly intensidad: number;
   readonly colorNombre: string | null;
+  readonly colorHex: string | null;
 }
 
 interface RegistroLog {
@@ -29,7 +30,7 @@ interface RegistroLog {
   readonly nivel: NivelLog;
   readonly titulo: string;
   readonly sintaxisMA2: string | null;
-  readonly comandoPayload: ComandoLuces | null;
+  readonly comandosPayload: readonly ComandoLuces[];
   readonly textoOriginal: string | null;
 }
 
@@ -45,11 +46,24 @@ type MenuContextual =
   | { readonly tipo: 'log'; readonly x: number; readonly y: number; readonly idLog: string };
 
 const EJEMPLOS_RAPIDOS = [
-  'Frontales al 50%',
+  'Frontales al 70% en azul',
+  'Frontales al 100% y contras apagadas',
   'Contraluz en rojo',
-  'Wash al 100%',
   'Apagar frontales',
 ] as const;
+
+const NIVELES_RAPIDOS = [0, 25, 50, 75, 100] as const;
+
+const TECLAS_SLIDER_CONFIRMACION: ReadonlySet<string> = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+]);
 
 function etiquetaEstadoConexion(estado: EstadoConexionMA2 | 'WEB'): {
   texto: string;
@@ -94,6 +108,7 @@ function inicializarGrupos(): Record<string, EstadoGrupo> {
       nombre: g.nombre,
       intensidad: 0,
       colorNombre: null,
+      colorHex: null,
     };
   }
   return inicial;
@@ -121,11 +136,22 @@ function posicionarMenu(x: number, y: number): { left: number; top: number } {
   };
 }
 
+function construirSintaxisDesdePayload(payload: ComandoLuces): string {
+  if (payload.tipo === 'color') {
+    const preset = payload.valor.includes('.') ? payload.valor : `4.${payload.valor}`;
+    return `Group ${payload.grupo} At Preset ${preset}`;
+  }
+  const nivel = payload.accion === 'apagar' ? '0' : payload.valor;
+  return `Group ${payload.grupo} At ${nivel}`;
+}
+
 export default function App() {
   const esElectron = typeof window !== 'undefined' && window.api !== undefined;
 
   const [orden, setOrden] = useState<string>('');
   const [grupos, setGrupos] = useState<Record<string, EstadoGrupo>>(inicializarGrupos);
+  const [grupoActivoId, setGrupoActivoId] = useState<string>('1');
+  const [valorSlider, setValorSlider] = useState<number>(0);
   const [estadoConexion, setEstadoConexion] = useState<EstadoConexionMA2 | 'WEB'>(
     esElectron ? 'CONECTANDO' : 'WEB'
   );
@@ -135,6 +161,10 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [menu, setMenu] = useState<MenuContextual | null>(null);
   const [confirmandoBlackout, setConfirmandoBlackout] = useState<boolean>(false);
+  const [historialOrdenes, setHistorialOrdenes] = useState<readonly string[]>([]);
+  const [indiceHistorial, setIndiceHistorial] = useState<number>(-1);
+  const [borradorTemporal, setBorradorTemporal] = useState<string>('');
+  const [sugerenciasOcultas, setSugerenciasOcultas] = useState<boolean>(false);
 
   const timersRef = useRef<Map<string, number>>(new Map());
   const timerBlackoutRef = useRef<number | null>(null);
@@ -147,14 +177,44 @@ export default function App() {
       return null;
     }
     const resultado = TraductorLuces.interpretarOrden(orden);
-    if (resultado.exito && resultado.comandoPayload !== null) {
-      const bloqueo = bloqueoDeSeguridad(resultado.comandoPayload, resultado.textoOriginal);
+    if (resultado.exito && resultado.comandosPayload.length > 0) {
+      const bloqueo = bloqueoDeSeguridadCompuesto(
+        resultado.comandosPayload,
+        resultado.textoOriginal
+      );
       if (bloqueo !== null) {
-        return { ...resultado, exito: false, comandoPayload: null, sintaxisMA2: null, mensajeError: bloqueo };
+        return {
+          ...resultado,
+          exito: false,
+          comandoPayload: null,
+          comandosPayload: [],
+          sintaxisMA2: null,
+          sintaxisListaMA2: [],
+          resumenesComandos: [],
+          mensajeError: bloqueo,
+        };
       }
     }
     return resultado;
   }, [orden]);
+
+  const sugerenciasActivas = useMemo<readonly string[]>(() => {
+    if (sugerenciasOcultas || orden.trim().length === 0) {
+      return [];
+    }
+    return TraductorLuces.generarSugerencias(orden, 3);
+  }, [orden, sugerenciasOcultas]);
+
+  const seleccionarGrupo = useCallback(
+    (idGrupo: string) => {
+      setGrupoActivoId(idGrupo);
+      const grupo = grupos[idGrupo];
+      if (grupo !== undefined) {
+        setValorSlider(grupo.intensidad);
+      }
+    },
+    [grupos]
+  );
 
   const lanzarToast = useCallback((nivel: NivelLog, titulo: string, detalle: string) => {
     const id = crearId('toast');
@@ -259,6 +319,7 @@ export default function App() {
               ...actual,
               intensidad: actual.intensidad === 0 ? 100 : actual.intensidad,
               colorNombre: c?.nombre ?? `Preset ${payload.valor}`,
+              colorHex: c?.hex ?? actual.colorHex,
             };
           } else {
             const valorNum = Number(payload.valor);
@@ -270,68 +331,111 @@ export default function App() {
         }
         return copia;
       });
+
+      if (ids.includes(grupoActivoId) && payload.tipo === 'intensidad') {
+        const valorNum = Number(payload.valor);
+        if (Number.isFinite(valorNum)) {
+          setValorSlider(valorNum);
+        }
+      }
     },
-    []
+    [grupoActivoId]
   );
 
-  const enviarComando = useCallback(
+  const despacharLoteComandos = useCallback(
     async (
-      payload: ComandoLuces,
-      sintaxisMA2: string,
-      titulo: string,
+      comandos: readonly ComandoLuces[],
+      tituloLote: string,
       textoOriginal: string | null = null,
-      color?: DefinicionColorMA2
-    ) => {
-      const bloqueo = bloqueoDeSeguridad(payload, textoOriginal);
+      colorOpcional?: DefinicionColorMA2
+    ): Promise<boolean> => {
+      // Validación atómica todo o nada antes de emitir cualquier paquete por IPC.
+      const bloqueo = bloqueoDeSeguridadCompuesto(comandos, textoOriginal);
       if (bloqueo !== null) {
         lanzarToast('advertencia', 'Orden bloqueada', bloqueo);
-        return;
+        return false;
       }
-      if (enviandoRef.current) return;
-      const clave = JSON.stringify(payload);
+
+      if (enviandoRef.current) {
+        return false;
+      }
+
+      const clave = JSON.stringify(comandos);
       const ahora = Date.now();
-      if (ultimoIntentoRef.current?.clave === clave && ahora - ultimoIntentoRef.current.instante < 900) return;
+      if (
+        ultimoIntentoRef.current?.clave === clave &&
+        ahora - ultimoIntentoRef.current.instante < 600
+      ) {
+        return false;
+      }
+
       ultimoIntentoRef.current = { clave, instante: ahora };
       enviandoRef.current = true;
       setEnviando(true);
-      try {
-        if (window.api !== undefined) {
-          const respuesta: RespuestaComandoIPC = await window.api.enviarComandoLuces(payload);
-          setEstadoConexion(respuesta.estadoConexion);
-          const comandoFinal = respuesta.comandoGenerado?.trim() ?? sintaxisMA2;
 
-          if (respuesta.exito) {
-            actualizarEstadoGrupoLocal(payload, color);
-            registrarLog({
-              nivel: 'exito',
-              titulo,
-              sintaxisMA2: comandoFinal,
-              comandoPayload: payload,
-              textoOriginal,
-            });
-            lanzarToast('exito', titulo, comandoFinal);
+      const sintaxisEnviadas: string[] = [];
+      let falloEnvio = false;
+
+      try {
+        for (let indice = 0; indice < comandos.length; indice += 1) {
+          const payload = comandos[indice];
+          const sintaxisEsperada = construirSintaxisDesdePayload(payload);
+          const etiquetaPaso =
+            comandos.length > 1
+              ? `${tituloLote} (${indice + 1}/${comandos.length})`
+              : tituloLote;
+
+          if (window.api !== undefined) {
+            const respuesta: RespuestaComandoIPC = await window.api.enviarComandoLuces(payload);
+            setEstadoConexion(respuesta.estadoConexion);
+            const comandoFinal = respuesta.comandoGenerado?.trim() ?? sintaxisEsperada;
+
+            if (respuesta.exito) {
+              actualizarEstadoGrupoLocal(payload, colorOpcional);
+              sintaxisEnviadas.push(comandoFinal);
+              registrarLog({
+                nivel: 'exito',
+                titulo: etiquetaPaso,
+                sintaxisMA2: comandoFinal,
+                comandosPayload: [payload],
+                textoOriginal,
+              });
+            } else {
+              falloEnvio = true;
+              registrarLog({
+                nivel: 'error',
+                titulo: `Error · ${etiquetaPaso}`,
+                sintaxisMA2: comandoFinal,
+                comandosPayload: [payload],
+                textoOriginal,
+              });
+              lanzarToast('error', 'No enviado a MA2', respuesta.mensaje);
+              break;
+            }
           } else {
+            await new Promise<void>((r) => window.setTimeout(r, 150));
+            actualizarEstadoGrupoLocal(payload, colorOpcional);
+            sintaxisEnviadas.push(sintaxisEsperada);
             registrarLog({
-              nivel: 'error',
-              titulo: `Error · ${titulo}`,
-              sintaxisMA2: comandoFinal,
-              comandoPayload: payload,
+              nivel: 'info',
+              titulo: `Simulación Web · ${etiquetaPaso}`,
+              sintaxisMA2: sintaxisEsperada,
+              comandosPayload: [payload],
               textoOriginal,
             });
-            lanzarToast('error', 'No enviado a MA2', respuesta.mensaje);
           }
-        } else {
-          await new Promise<void>((r) => window.setTimeout(r, 220));
-          actualizarEstadoGrupoLocal(payload, color);
-          registrarLog({
-            nivel: 'info',
-            titulo: `Simulación Web · ${titulo}`,
-            sintaxisMA2,
-            comandoPayload: payload,
-            textoOriginal,
-          });
-          lanzarToast('info', `${titulo} (Web)`, sintaxisMA2);
         }
+
+        if (!falloEnvio && sintaxisEnviadas.length > 0) {
+          const resumen = sintaxisEnviadas.join(' · ');
+          if (window.api !== undefined) {
+            lanzarToast('exito', tituloLote, resumen);
+          } else {
+            lanzarToast('info', `${tituloLote} (Web)`, resumen);
+          }
+        }
+
+        return !falloEnvio;
       } finally {
         enviandoRef.current = false;
         setEnviando(false);
@@ -342,47 +446,70 @@ export default function App() {
 
   const procesarFormulario = useCallback(async () => {
     const res = interpretacion ?? TraductorLuces.interpretarOrden(orden);
-    if (!res.exito || res.comandoPayload === null || res.sintaxisMA2 === null) {
+    if (!res.exito || res.comandosPayload.length === 0) {
       const msg = res.mensajeError ?? 'No se pudo interpretar la instrucción.';
       lanzarToast('advertencia', 'Orden incompleta', msg);
       return;
     }
-    await enviarComando(
-      res.comandoPayload,
-      res.sintaxisMA2,
-      `${res.etiquetaAccion} · ${res.etiquetaGrupo}`,
+
+    const titulo =
+      res.comandosPayload.length > 1
+        ? `${res.etiquetaAccion} (${res.comandosPayload.length})`
+        : `${res.etiquetaAccion} · ${res.etiquetaGrupo}`;
+
+    const exitoEnvio = await despacharLoteComandos(
+      res.comandosPayload,
+      titulo,
       res.textoOriginal
     );
-  }, [enviarComando, interpretacion, lanzarToast, orden]);
+
+    if (exitoEnvio && res.textoOriginal.length > 0) {
+      setHistorialOrdenes((prev) => {
+        if (prev[0] === res.textoOriginal) {
+          return prev;
+        }
+        return [res.textoOriginal, ...prev.slice(0, 24)];
+      });
+      setIndiceHistorial(-1);
+      setBorradorTemporal('');
+      setSugerenciasOcultas(true);
+    }
+  }, [despacharLoteComandos, interpretacion, lanzarToast, orden]);
 
   const accionRapidaGrupo = useCallback(
     async (idGrupo: string, porcentaje: number) => {
       const g = grupos[idGrupo];
       const nombre = g?.nombre ?? `Grupo ${idGrupo}`;
       const accion = porcentaje === 0 ? 'apagar' : porcentaje === 100 ? 'encender' : 'ajustar';
-      await enviarComando(
-        { accion, grupo: idGrupo, valor: String(porcentaje), tipo: 'intensidad' },
-        `Group ${idGrupo} At ${porcentaje}`,
+
+      if (idGrupo !== '1 thru 6') {
+        setGrupoActivoId(idGrupo);
+        setValorSlider(porcentaje);
+      }
+
+      await despacharLoteComandos(
+        [{ accion, grupo: idGrupo, valor: String(porcentaje), tipo: 'intensidad' }],
         `${nombre} al ${porcentaje}%`,
         `${nombre} al ${porcentaje}%`
       );
     },
-    [enviarComando, grupos]
+    [despacharLoteComandos, grupos]
   );
 
   const colorRapidoGrupo = useCallback(
     async (idGrupo: string, color: DefinicionColorMA2) => {
       const g = grupos[idGrupo];
       const nombre = g?.nombre ?? `Grupo ${idGrupo}`;
-      await enviarComando(
-        { accion: 'color', grupo: idGrupo, valor: color.preset, tipo: 'color' },
-        `Group ${idGrupo} At Preset ${color.preset}`,
+      setGrupoActivoId(idGrupo);
+
+      await despacharLoteComandos(
+        [{ accion: 'color', grupo: idGrupo, valor: color.preset, tipo: 'color' }],
         `${nombre} · ${color.nombre}`,
         `Poner ${nombre.toLowerCase()} en ${color.nombre.toLowerCase()}`,
         color
       );
     },
-    [enviarComando, grupos]
+    [despacharLoteComandos, grupos]
   );
 
   const copiarTexto = useCallback(
@@ -400,6 +527,7 @@ export default function App() {
   const abrirMenuGrupo = (e: ReactMouseEvent<HTMLElement>, idGrupo: string) => {
     e.preventDefault();
     e.stopPropagation();
+    seleccionarGrupo(idGrupo);
     setMenu({ tipo: 'grupo', x: e.clientX, y: e.clientY, idGrupo });
   };
 
@@ -409,10 +537,54 @@ export default function App() {
     setMenu({ tipo: 'log', x: e.clientX, y: e.clientY, idLog });
   };
 
-  const manejarEnter = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+  const aplicarSugerencia = (textoSugerido: string) => {
+    setOrden(textoSugerido);
+    setIndiceHistorial(-1);
+    setSugerenciasOcultas(true);
+    inputRef.current?.focus();
+  };
+
+  const manejarTecladoOrden = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void procesarFormulario();
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setOrden('');
+      setIndiceHistorial(-1);
+      setBorradorTemporal('');
+      setSugerenciasOcultas(true);
+      setMenu(null);
+      return;
+    }
+
+    if (e.key === 'Tab' && sugerenciasActivas.length > 0) {
+      e.preventDefault();
+      aplicarSugerencia(sugerenciasActivas[0]);
+      return;
+    }
+
+    if (e.key === 'ArrowUp' && !orden.includes('\n') && historialOrdenes.length > 0) {
+      e.preventDefault();
+      if (indiceHistorial === -1) {
+        setBorradorTemporal(orden);
+      }
+      const siguienteIndice = Math.min(indiceHistorial + 1, historialOrdenes.length - 1);
+      setIndiceHistorial(siguienteIndice);
+      setOrden(historialOrdenes[siguienteIndice]);
+      setSugerenciasOcultas(true);
+      return;
+    }
+
+    if (e.key === 'ArrowDown' && !orden.includes('\n') && indiceHistorial >= 0) {
+      e.preventDefault();
+      const siguienteIndice = indiceHistorial - 1;
+      setIndiceHistorial(siguienteIndice);
+      setOrden(siguienteIndice < 0 ? borradorTemporal : historialOrdenes[siguienteIndice]);
+      setSugerenciasOcultas(true);
     }
   };
 
@@ -442,6 +614,7 @@ export default function App() {
     void accionRapidaGrupo('1 thru 6', 0);
   }, [accionRapidaGrupo, confirmandoBlackout, lanzarToast]);
 
+  const grupoActivo = grupos[grupoActivoId] ?? grupos['1'];
   const grupoEnMenu = menu?.tipo === 'grupo' ? grupos[menu.idGrupo] : undefined;
   const logEnMenu =
     menu?.tipo === 'log' ? logs.find((item) => item.id === menu.idLog) : undefined;
@@ -494,7 +667,7 @@ export default function App() {
           </div>
         </header>
 
-        {/* Barra limpia de grupos (Clic derecho o ⋮ para menú contextual) */}
+        {/* Tira de grupos: 1 clic selecciona, doble clic o toque en badge alterna 0% / 100% */}
         <section className="tira-grupos" aria-label="Grupos de luces">
           {cargando
             ? Array.from({ length: 6 }).map((_, i) => (
@@ -505,19 +678,22 @@ export default function App() {
             : CATALOGO_GRUPOS.map((g) => {
                 const estado = grupos[g.id];
                 const encendido = (estado?.intensidad ?? 0) > 0;
+                const seleccionado = grupoActivoId === g.id;
+
                 return (
                   <div
                     key={g.id}
-                    className={`pastilla-grupo glass${encendido ? ' encendido' : ''}`}
-                    onClick={() => void accionRapidaGrupo(g.id, encendido ? 0 : 100)}
+                    className={`pastilla-grupo glass${encendido ? ' encendido' : ''}${seleccionado ? ' seleccionada' : ''}`}
+                    onClick={() => seleccionarGrupo(g.id)}
+                    onDoubleClick={() => void accionRapidaGrupo(g.id, encendido ? 0 : 100)}
                     onContextMenu={(e) => abrirMenuGrupo(e, g.id)}
                     role="button"
                     tabIndex={0}
-                    title="Clic para alternar · Clic derecho para opciones"
+                    title="Clic: seleccionar grupo · Doble clic o badge: alternar 0% / 100% · Clic derecho: menú"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        void accionRapidaGrupo(g.id, encendido ? 0 : 100);
+                        seleccionarGrupo(g.id);
                       }
                     }}
                   >
@@ -526,9 +702,17 @@ export default function App() {
                       <span className="pastilla-nombre">{g.nombre}</span>
                     </div>
                     <div className="pastilla-meta">
-                      <span className={`badge ${encendido ? 'badge-activo' : 'badge-sutil'}`}>
+                      <button
+                        type="button"
+                        className={`badge badge-toggle ${encendido ? 'badge-activo' : 'badge-sutil'}`}
+                        title={`Alternar ${g.nombre} entre 0% y 100%`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void accionRapidaGrupo(g.id, encendido ? 0 : 100);
+                        }}
+                      >
                         {estado?.intensidad ?? 0}%
-                      </span>
+                      </button>
                       <button
                         type="button"
                         className="btn-icono"
@@ -543,37 +727,113 @@ export default function App() {
               })}
         </section>
 
+        {/* Barra contextual de control rápido a 1 clic vinculada al grupo activo */}
+        <section className="barra-control-rapido glass" aria-label="Control rápido del grupo activo">
+          <div className="control-grupo-etiqueta">
+            <span className="badge badge-activo">G{grupoActivo?.id}</span>
+            <span className="control-grupo-nombre">{grupoActivo?.nombre}</span>
+          </div>
+
+          <div className="control-intensidades" role="group" aria-label="Niveles rápidos">
+            {NIVELES_RAPIDOS.map((nivel) => (
+              <button
+                key={nivel}
+                type="button"
+                className={`chip-nivel${grupoActivo?.intensidad === nivel ? ' activo' : ''}`}
+                disabled={enviando}
+                onClick={() => void accionRapidaGrupo(grupoActivoId, nivel)}
+              >
+                {nivel}%
+              </button>
+            ))}
+          </div>
+
+          <div className="control-slider">
+            <input
+              type="range"
+              className="slider-carmesi"
+              min={0}
+              max={100}
+              step={1}
+              value={valorSlider}
+              aria-label={`Intensidad de ${grupoActivo?.nombre}`}
+              onChange={(e) => setValorSlider(Number(e.target.value))}
+              onPointerUp={() => void accionRapidaGrupo(grupoActivoId, valorSlider)}
+              onKeyUp={(e) => {
+                if (TECLAS_SLIDER_CONFIRMACION.has(e.key)) {
+                  void accionRapidaGrupo(grupoActivoId, valorSlider);
+                }
+              }}
+            />
+            <span className="slider-valor">{valorSlider}%</span>
+          </div>
+
+          <div className="control-colores" role="group" aria-label="Colores RF-05">
+            {CATALOGO_COLORES.map((color) => {
+              const colorActivo = grupoActivo?.colorNombre === color.nombre;
+              return (
+                <button
+                  key={color.id}
+                  type="button"
+                  className={`punto-color-rapido${colorActivo ? ' activo' : ''}`}
+                  style={{ backgroundColor: color.hex }}
+                  title={`${color.nombre} (${color.preset})`}
+                  aria-label={`Aplicar ${color.nombre} a ${grupoActivo?.nombre}`}
+                  disabled={enviando}
+                  onClick={() => void colorRapidoGrupo(grupoActivoId, color)}
+                />
+              );
+            })}
+          </div>
+        </section>
+
         {/* Área principal de 2 columnas limpia */}
         <main className="espacio-principal">
           {/* Columna izquierda: Consola */}
           <section className="panel glass">
             <div className="panel-titulo">
               <h2>Orden de Iluminación</h2>
-              <span className="texto-gris">Enter para ejecutar</span>
+              <span className="texto-gris">Enter ejecuta · ↑↓ historial · Esc limpia</span>
             </div>
 
             <div className="campo-contenedor">
               <textarea
                 ref={inputRef}
                 value={orden}
-                onChange={(e) => setOrden(e.target.value)}
-                onKeyDown={manejarEnter}
-                placeholder='Escribe una instrucción... ej. "Frontales al 50%" o "Contraluz en rojo"'
+                onChange={(e) => {
+                  setOrden(e.target.value);
+                  setIndiceHistorial(-1);
+                  setSugerenciasOcultas(false);
+                }}
+                onKeyDown={manejarTecladoOrden}
+                placeholder='Ej. "Frontales al 70% en azul" o "Frontales al 100% y contras apagadas"'
                 maxLength={220}
                 aria-label="Instrucción de iluminación"
               />
 
               <div className="chips-ejemplos">
-                {EJEMPLOS_RAPIDOS.map((ejemplo) => (
-                  <button
-                    key={ejemplo}
-                    type="button"
-                    className="chip"
-                    onClick={() => setOrden(ejemplo)}
-                  >
-                    {ejemplo}
-                  </button>
-                ))}
+                {sugerenciasActivas.length > 0
+                  ? sugerenciasActivas.map((sugerencia, idx) => (
+                      <button
+                        key={sugerencia}
+                        type="button"
+                        className={`chip${idx === 0 ? ' chip-sugerida' : ''}`}
+                        onClick={() => aplicarSugerencia(sugerencia)}
+                      >
+                        {idx === 0 && <span className="atajo-tab">Tab</span>}
+                        {sugerencia}
+                      </button>
+                    ))
+                  : EJEMPLOS_RAPIDOS.map((ejemplo) => (
+                      <button
+                        key={ejemplo}
+                        type="button"
+                        className="chip"
+                        onClick={() => aplicarSugerencia(ejemplo)}
+                      >
+                        {ejemplo}
+                      </button>
+                    ))}
               </div>
             </div>
 
@@ -600,7 +860,11 @@ export default function App() {
                   <button
                     type="button"
                     className="btn-fantasma"
-                    onClick={() => setOrden('')}
+                    onClick={() => {
+                      setOrden('');
+                      setIndiceHistorial(-1);
+                      setSugerenciasOcultas(true);
+                    }}
                   >
                     Limpiar
                   </button>
@@ -752,17 +1016,16 @@ export default function App() {
                 <span>{logEnMenu.hora}</span>
                 <strong>Evento</strong>
               </div>
-              {logEnMenu.comandoPayload !== null && (
+              {logEnMenu.comandosPayload.length > 0 && (
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    const p = logEnMenu.comandoPayload;
-                    const s = logEnMenu.sintaxisMA2 ?? '';
+                    const lote = logEnMenu.comandosPayload;
+                    const titulo = logEnMenu.titulo;
+                    const orig = logEnMenu.textoOriginal;
                     setMenu(null);
-                    if (p !== null) {
-                      void enviarComando(p, s, logEnMenu.titulo, logEnMenu.textoOriginal);
-                    }
+                    void despacharLoteComandos(lote, titulo, orig);
                   }}
                 >
                   Reenviar comando
@@ -790,6 +1053,7 @@ export default function App() {
                     setMenu(null);
                     if (t !== null) {
                       setOrden(t);
+                      setSugerenciasOcultas(true);
                       inputRef.current?.focus();
                     }
                   }}

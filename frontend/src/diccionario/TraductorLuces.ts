@@ -22,14 +22,17 @@ export interface DefinicionColorMA2 {
 }
 
 /**
- * Resultado estructurado de interpretar una orden en lenguaje natural.
+ * Resultado estructurado de interpretar una orden simple o compuesta en lenguaje natural.
  */
 export interface ResultadoInterpretacion {
   readonly exito: boolean;
   readonly textoOriginal: string;
   readonly textoNormalizado: string;
   readonly comandoPayload: ComandoLuces | null;
+  readonly comandosPayload: readonly ComandoLuces[];
   readonly sintaxisMA2: string | null;
+  readonly sintaxisListaMA2: readonly string[];
+  readonly resumenesComandos: readonly string[];
   readonly etiquetaGrupo: string;
   readonly etiquetaAccion: string;
   readonly etiquetaValor: string;
@@ -143,9 +146,64 @@ export const CATALOGO_COLORES: readonly DefinicionColorMA2[] = [
 ] as const;
 
 const PALABRAS_GENERAL = ['todos', 'todas', 'todo', 'general', 'escenario', 'master'] as const;
-const PALABRAS_APAGAR = ['apagar', 'apaga', 'apagado', 'apagon', 'blackout', 'cerrar', 'off'] as const;
-const PALABRAS_ENCENDER = ['encender', 'enciende', 'prender', 'prende', 'activar', 'activa', 'on', 'full', 'maximo'] as const;
-const PALABRAS_AJUSTAR = ['ajustar', 'ajusta', 'subir', 'sube', 'bajar', 'baja', 'poner', 'pon', 'dejar', 'cambiar', 'atenuar', 'dimmer'] as const;
+const PALABRAS_APAGAR = [
+  'apagar',
+  'apaga',
+  'apagado',
+  'apagada',
+  'apagados',
+  'apagadas',
+  'apagon',
+  'blackout',
+  'cerrar',
+  'off',
+] as const;
+const PALABRAS_ENCENDER = [
+  'encender',
+  'enciende',
+  'encendido',
+  'encendida',
+  'encendidos',
+  'encendidas',
+  'prender',
+  'prende',
+  'activar',
+  'activa',
+  'on',
+  'full',
+  'maximo',
+] as const;
+const PALABRAS_AJUSTAR = [
+  'ajustar',
+  'ajusta',
+  'subir',
+  'sube',
+  'bajar',
+  'baja',
+  'poner',
+  'pon',
+  'dejar',
+  'cambiar',
+  'atenuar',
+  'dimmer',
+] as const;
+
+const CARACTERES_INYECCION = /[\r\n;\x00-\x1f]/;
+
+const PLANTILLAS_AUTOCOMPLETADO: readonly string[] = [
+  'Frontales al 50%',
+  'Frontales al 70% en azul',
+  'Frontales al 100% y contras apagadas',
+  'Frontales al 50%, contras en rojo',
+  'Encender contras en blanco',
+  'Contraluz en rojo',
+  'Laterales al 75%',
+  'Wash en ámbar',
+  'Cabezas móviles en azul',
+  'Público al 100%',
+  'Apagar frontales',
+  'Apagón general',
+];
 
 interface ResolucionGrupoInterna {
   readonly exito: boolean;
@@ -164,7 +222,7 @@ interface ResolucionIntensidadInterna {
 }
 
 /**
- * Traductor de lenguaje natural en español a payloads tipados para GrandMA2 (RF-03 y RF-05).
+ * Traductor de lenguaje natural en español a payloads tipados para GrandMA2 (RF-03, RF-04 y RF-05).
  */
 export class TraductorLuces {
   /**
@@ -182,25 +240,218 @@ export class TraductorLuces {
   }
 
   /**
-   * Interpreta una instrucción en lenguaje natural y devuelve el comando estructurado
-   * junto con su vista previa en sintaxis GrandMA2.
+   * Genera hasta `limite` sugerencias offline relevantes según lo que el operador escribe.
+   */
+  public static generarSugerencias(textoParcial: string, limite = 3): readonly string[] {
+    const consulta = TraductorLuces.normalizarTexto(textoParcial);
+    if (consulta.length === 0) {
+      return [];
+    }
+
+    const tokens = consulta.split(' ').filter((t) => t.length > 0);
+    const coincidencias = PLANTILLAS_AUTOCOMPLETADO.filter((plantilla) => {
+      const plantillaNorm = TraductorLuces.normalizarTexto(plantilla);
+      if (plantillaNorm === consulta) {
+        return false;
+      }
+      return tokens.every((token) => plantillaNorm.includes(token));
+    });
+
+    if (coincidencias.length >= limite) {
+      return coincidencias.slice(0, limite);
+    }
+
+    const dinamicas: string[] = [...coincidencias];
+    const grupoMencionado = CATALOGO_GRUPOS.find((g) =>
+      g.sinonimos.some((s) => tokens.some((t) => s.startsWith(t) || t === s))
+    );
+
+    if (grupoMencionado !== undefined) {
+      const nombreBase = grupoMencionado.nombre;
+      const propuestas = [
+        `${nombreBase} al 50%`,
+        `${nombreBase} al 70% en azul`,
+        `Apagar ${nombreBase.toLowerCase()}`,
+      ];
+      for (const propuesta of propuestas) {
+        if (
+          dinamicas.length < limite &&
+          !dinamicas.includes(propuesta) &&
+          TraductorLuces.normalizarTexto(propuesta) !== consulta
+        ) {
+          dinamicas.push(propuesta);
+        }
+      }
+    }
+
+    return dinamicas.slice(0, limite);
+  }
+
+  /**
+   * Interpreta una instrucción simple o compuesta en lenguaje natural y devuelve
+   * la lista ordenada de comandos estructurados junto con su vista previa en sintaxis GrandMA2.
    */
   public static interpretarOrden(instruccionUsuario: string): ResultadoInterpretacion {
     const textoOriginal = instruccionUsuario.trim();
+
+    if (CARACTERES_INYECCION.test(instruccionUsuario)) {
+      return TraductorLuces.crearResultadoError(
+        textoOriginal,
+        TraductorLuces.normalizarTexto(textoOriginal),
+        '—',
+        'Bloqueada',
+        'Caracteres no permitidos detectados por seguridad.'
+      );
+    }
+
+    const textoNormalizado = TraductorLuces.normalizarTexto(textoOriginal);
+    if (textoNormalizado.length === 0) {
+      return TraductorLuces.crearResultadoError(
+        textoOriginal,
+        textoNormalizado,
+        '—',
+        '—',
+        'Escribe una orden de iluminación antes de interpretar.'
+      );
+    }
+
+    const clausulas = TraductorLuces.dividirEnClausulas(textoOriginal);
+    if (clausulas.length === 0) {
+      return TraductorLuces.crearResultadoError(
+        textoOriginal,
+        textoNormalizado,
+        '—',
+        'Inválida',
+        'Una de las cláusulas de la orden está vacía.'
+      );
+    }
+
+    if (clausulas.length === 1) {
+      return TraductorLuces.interpretarClausulaSimple(clausulas[0]);
+    }
+
+    const comandosAcumulados: ComandoLuces[] = [];
+    const sintaxisAcumulada: string[] = [];
+    const resumenesAcumulados: string[] = [];
+
+    for (let indice = 0; indice < clausulas.length; indice += 1) {
+      const clausula = clausulas[indice];
+      const resultadoParcial = TraductorLuces.interpretarClausulaSimple(clausula);
+
+      if (!resultadoParcial.exito || resultadoParcial.comandosPayload.length === 0) {
+        return TraductorLuces.crearResultadoError(
+          textoOriginal,
+          textoNormalizado,
+          resultadoParcial.etiquetaGrupo,
+          resultadoParcial.etiquetaAccion,
+          `Cláusula ${indice + 1} ("${clausula}"): ${resultadoParcial.mensajeError ?? 'No válida.'}`
+        );
+      }
+
+      comandosAcumulados.push(...resultadoParcial.comandosPayload);
+      sintaxisAcumulada.push(...resultadoParcial.sintaxisListaMA2);
+      resumenesAcumulados.push(...resultadoParcial.resumenesComandos);
+    }
+
+    return {
+      exito: true,
+      textoOriginal,
+      textoNormalizado,
+      comandoPayload: comandosAcumulados[0],
+      comandosPayload: comandosAcumulados,
+      sintaxisMA2: sintaxisAcumulada.join('  ·  '),
+      sintaxisListaMA2: sintaxisAcumulada,
+      resumenesComandos: resumenesAcumulados,
+      etiquetaGrupo: `${clausulas.length} cláusulas`,
+      etiquetaAccion: `Orden Compuesta (${comandosAcumulados.length})`,
+      etiquetaValor: sintaxisAcumulada.join(' · '),
+    };
+  }
+
+  private static dividirEnClausulas(textoOriginal: string): readonly string[] {
+    if (textoOriginal.includes(',')) {
+      const segmentosComa = textoOriginal.split(',').map((s) => s.trim());
+      if (segmentosComa.some((s) => s.length === 0)) {
+        return [];
+      }
+      const resultado: string[] = [];
+      for (const segmento of segmentosComa) {
+        resultado.push(...TraductorLuces.dividirSegmentoPorConectorY(segmento));
+      }
+      return resultado;
+    }
+
+    return TraductorLuces.dividirSegmentoPorConectorY(textoOriginal);
+  }
+
+  /**
+   * Divide por " y " únicamente cuando ambos lados constituyen sub-órdenes completas
+   * con su propio grupo y su propia intención, preservando casos de ambigüedad como
+   * "frontales y laterales al 50%" o "grupo 1 y grupo 2 al 50%".
+   */
+  private static dividirSegmentoPorConectorY(segmento: string): readonly string[] {
+    const partes = segmento.split(/\s+y\s+/i).map((p) => p.trim());
+    if (partes.length < 2) {
+      return [segmento.trim()];
+    }
+
+    const todasIndependientes = partes.every((parte) =>
+      TraductorLuces.esSubordenIndependiente(parte)
+    );
+
+    return todasIndependientes ? partes : [segmento.trim()];
+  }
+
+  private static esSubordenIndependiente(fragmento: string): boolean {
+    const norm = TraductorLuces.normalizarTexto(fragmento);
+    if (norm.length === 0) {
+      return false;
+    }
+
+    const palabras = norm.split(' ');
+    const tieneGrupoCatalogo = CATALOGO_GRUPOS.some((g) =>
+      g.sinonimos.some((s) => palabras.includes(s))
+    );
+    const tieneGrupoNumerico = /\bgrupos?\s+\d+/.test(norm);
+    const tienePalabraGeneral = PALABRAS_GENERAL.some((p) => palabras.includes(p));
+    const esBlackout = palabras.some((p) => p === 'apagon' || p === 'blackout');
+
+    if (esBlackout) {
+      return true;
+    }
+
+    const tieneGrupo = tieneGrupoCatalogo || tieneGrupoNumerico || tienePalabraGeneral;
+    if (!tieneGrupo) {
+      return false;
+    }
+
+    const sinGrupo = norm
+      .replace(/\bgrupos?\s+\d+(?:\s*(?:al|a|hasta|thru|-)\s*\d+)?/g, ' ')
+      .trim();
+    const tieneColor = CATALOGO_COLORES.some((c) => c.sinonimos.some((s) => palabras.includes(s)));
+    const tieneAccionOValor =
+      /\d/.test(sinGrupo) ||
+      palabras.includes('mitad') ||
+      palabras.includes('medio') ||
+      PALABRAS_APAGAR.some((p) => palabras.includes(p)) ||
+      PALABRAS_ENCENDER.some((p) => palabras.includes(p)) ||
+      PALABRAS_AJUSTAR.some((p) => palabras.includes(p));
+
+    return tieneColor || tieneAccionOValor;
+  }
+
+  private static interpretarClausulaSimple(clausulaOriginal: string): ResultadoInterpretacion {
+    const textoOriginal = clausulaOriginal.trim();
     const textoNormalizado = TraductorLuces.normalizarTexto(textoOriginal);
 
     if (textoNormalizado.length === 0) {
-      return {
-        exito: false,
+      return TraductorLuces.crearResultadoError(
         textoOriginal,
         textoNormalizado,
-        comandoPayload: null,
-        sintaxisMA2: null,
-        etiquetaGrupo: '—',
-        etiquetaAccion: '—',
-        etiquetaValor: '—',
-        mensajeError: 'Escribe una orden de iluminación antes de interpretar.',
-      };
+        '—',
+        '—',
+        'Escribe una orden de iluminación antes de interpretar.'
+      );
     }
 
     const palabras = textoNormalizado.split(' ');
@@ -210,17 +461,13 @@ export class TraductorLuces {
     const tieneEncender = PALABRAS_ENCENDER.some((p) => palabras.includes(p));
 
     if (tieneApagar && tieneEncender) {
-      return {
-        exito: false,
+      return TraductorLuces.crearResultadoError(
         textoOriginal,
         textoNormalizado,
-        comandoPayload: null,
-        sintaxisMA2: null,
-        etiquetaGrupo: '—',
-        etiquetaAccion: 'Contradictoria',
-        etiquetaValor: '—',
-        mensajeError: 'Orden contradictoria: no se puede encender y apagar a la vez.',
-      };
+        '—',
+        'Contradictoria',
+        'Orden contradictoria: no se puede encender y apagar a la vez.'
+      );
     }
 
     // 2. Detección de ambigüedad por múltiples colores
@@ -229,17 +476,13 @@ export class TraductorLuces {
     );
 
     if (coloresDetectados.length > 1) {
-      return {
-        exito: false,
+      return TraductorLuces.crearResultadoError(
         textoOriginal,
         textoNormalizado,
-        comandoPayload: null,
-        sintaxisMA2: null,
-        etiquetaGrupo: '—',
-        etiquetaAccion: 'Ambigua',
-        etiquetaValor: '—',
-        mensajeError: 'Orden ambigua: se detectaron múltiples colores en la misma instrucción.',
-      };
+        '—',
+        'Ambigua',
+        'Orden ambigua: se detectaron múltiples colores en la misma instrucción.'
+      );
     }
 
     const esBlackout = palabras.some((p) => p === 'apagon' || p === 'blackout');
@@ -248,37 +491,121 @@ export class TraductorLuces {
     const grupoResuelto = TraductorLuces.resolverGrupo(textoNormalizado, palabras, esBlackout);
 
     if (!grupoResuelto.exito || grupoResuelto.id === undefined || grupoResuelto.nombre === undefined) {
-      return {
-        exito: false,
+      return TraductorLuces.crearResultadoError(
         textoOriginal,
         textoNormalizado,
-        comandoPayload: null,
-        sintaxisMA2: null,
-        etiquetaGrupo: grupoResuelto.esAmbiguo ? 'Ambigua' : 'No identificado',
-        etiquetaAccion: 'Pendiente',
-        etiquetaValor: '—',
-        mensajeError:
-          grupoResuelto.error ??
-          'No se identificó el grupo o zona. Prueba indicando: frontales, contraluz, laterales, wash, móviles, público o "grupo 1".',
-      };
+        grupoResuelto.esAmbiguo ? 'Ambigua' : 'No identificado',
+        'Pendiente',
+        grupoResuelto.error ??
+          'No se identificó el grupo o zona. Prueba indicando: frontales, contraluz, laterales, wash, móviles, público o "grupo 1".'
+      );
     }
 
-    // 4. Si se detectó un color único y no es blackout, se aplica la acción de color
+    const textoSinGrupo = grupoResuelto.textoSinGrupo ?? textoNormalizado;
+
+    // 4. Color único: puede venir solo o combinado con intensidad (ej. "frontales al 70% en azul")
     const colorResuelto = coloresDetectados.length === 1 ? coloresDetectados[0] : null;
     if (colorResuelto !== null && !esBlackout) {
+      const tieneIndicacionIntensidad =
+        /\d/.test(textoSinGrupo) ||
+        palabras.includes('mitad') ||
+        palabras.includes('medio') ||
+        tieneEncender ||
+        tieneApagar;
+
+      if (tieneIndicacionIntensidad) {
+        if (tieneApagar) {
+          return TraductorLuces.crearResultadoError(
+            textoOriginal,
+            textoNormalizado,
+            `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
+            'Contradictoria',
+            'Orden contradictoria: no se puede aplicar un color al mismo tiempo que se apaga el grupo.'
+          );
+        }
+
+        const intensidadAsociada = TraductorLuces.resolverIntensidad(
+          textoSinGrupo,
+          palabras,
+          false
+        );
+
+        if (
+          !intensidadAsociada.exito ||
+          intensidadAsociada.accion === undefined ||
+          intensidadAsociada.valor === undefined
+        ) {
+          return TraductorLuces.crearResultadoError(
+            textoOriginal,
+            textoNormalizado,
+            `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
+            'Pendiente',
+            intensidadAsociada.error ?? 'No se pudo resolver la intensidad junto al color.'
+          );
+        }
+
+        if (Number(intensidadAsociada.valor) === 0) {
+          return TraductorLuces.crearResultadoError(
+            textoOriginal,
+            textoNormalizado,
+            `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
+            'Contradictoria',
+            'No se puede aplicar un color con intensidad 0%.'
+          );
+        }
+
+        const payloadIntensidad: ComandoLuces = {
+          accion: intensidadAsociada.accion,
+          grupo: grupoResuelto.id,
+          valor: intensidadAsociada.valor,
+          tipo: 'intensidad',
+        };
+        const payloadColor: ComandoLuces = {
+          accion: 'color',
+          grupo: grupoResuelto.id,
+          valor: colorResuelto.preset,
+          tipo: 'color',
+        };
+
+        const sintaxisIntensidad = `Group ${grupoResuelto.id} At ${intensidadAsociada.valor}`;
+        const sintaxisColor = `Group ${grupoResuelto.id} At Preset ${colorResuelto.preset}`;
+
+        return {
+          exito: true,
+          textoOriginal,
+          textoNormalizado,
+          comandoPayload: payloadIntensidad,
+          comandosPayload: [payloadIntensidad, payloadColor],
+          sintaxisMA2: `${sintaxisIntensidad}  ·  ${sintaxisColor}`,
+          sintaxisListaMA2: [sintaxisIntensidad, sintaxisColor],
+          resumenesComandos: [
+            `${grupoResuelto.nombre} al ${intensidadAsociada.valor}%`,
+            `${grupoResuelto.nombre} · ${colorResuelto.nombre}`,
+          ],
+          etiquetaGrupo: `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
+          etiquetaAccion: 'Intensidad + Color',
+          etiquetaValor: `${intensidadAsociada.valor}% · ${colorResuelto.nombre} (${colorResuelto.preset})`,
+          colorHex: colorResuelto.hex,
+        };
+      }
+
       const payloadColor: ComandoLuces = {
         accion: 'color',
         grupo: grupoResuelto.id,
         valor: colorResuelto.preset,
         tipo: 'color',
       };
+      const sintaxisColor = `Group ${grupoResuelto.id} At Preset ${colorResuelto.preset}`;
 
       return {
         exito: true,
         textoOriginal,
         textoNormalizado,
         comandoPayload: payloadColor,
-        sintaxisMA2: `Group ${grupoResuelto.id} At Preset ${colorResuelto.preset}`,
+        comandosPayload: [payloadColor],
+        sintaxisMA2: sintaxisColor,
+        sintaxisListaMA2: [sintaxisColor],
+        resumenesComandos: [`${grupoResuelto.nombre} · ${colorResuelto.nombre}`],
         etiquetaGrupo: `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
         etiquetaAccion: 'Aplicar Color',
         etiquetaValor: `${colorResuelto.nombre} (Preset ${colorResuelto.preset})`,
@@ -286,27 +613,26 @@ export class TraductorLuces {
       };
     }
 
-    // 5. Resolución y validación de intensidad
+    // 5. Resolución y validación de intensidad pura
     const intensidadResuelta = TraductorLuces.resolverIntensidad(
-      grupoResuelto.textoSinGrupo ?? textoNormalizado,
+      textoSinGrupo,
       palabras,
       esBlackout
     );
 
-    if (!intensidadResuelta.exito || intensidadResuelta.accion === undefined || intensidadResuelta.valor === undefined) {
-      return {
-        exito: false,
+    if (
+      !intensidadResuelta.exito ||
+      intensidadResuelta.accion === undefined ||
+      intensidadResuelta.valor === undefined
+    ) {
+      return TraductorLuces.crearResultadoError(
         textoOriginal,
         textoNormalizado,
-        comandoPayload: null,
-        sintaxisMA2: null,
-        etiquetaGrupo: `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
-        etiquetaAccion: 'Pendiente',
-        etiquetaValor: '—',
-        mensajeError:
-          intensidadResuelta.error ??
-          'Indica una acción o intensidad (ej. "encender", "apagar", "al 50%") o un color (ej. "rojo", "azul", "ámbar").',
-      };
+        `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
+        'Pendiente',
+        intensidadResuelta.error ??
+          'Indica una acción o intensidad (ej. "encender", "apagar", "al 50%") o un color (ej. "rojo", "azul", "ámbar").'
+      );
     }
 
     const payloadIntensidad: ComandoLuces = {
@@ -323,15 +649,43 @@ export class TraductorLuces {
           ? 'Encender'
           : 'Ajustar Intensidad';
 
+    const sintaxisMA2 = `Group ${grupoResuelto.id} At ${intensidadResuelta.valor}`;
+
     return {
       exito: true,
       textoOriginal,
       textoNormalizado,
       comandoPayload: payloadIntensidad,
-      sintaxisMA2: `Group ${grupoResuelto.id} At ${intensidadResuelta.valor}`,
+      comandosPayload: [payloadIntensidad],
+      sintaxisMA2,
+      sintaxisListaMA2: [sintaxisMA2],
+      resumenesComandos: [`${grupoResuelto.nombre} al ${intensidadResuelta.valor}%`],
       etiquetaGrupo: `${grupoResuelto.nombre} (Grp ${grupoResuelto.id})`,
       etiquetaAccion,
       etiquetaValor: `${intensidadResuelta.valor}%`,
+    };
+  }
+
+  private static crearResultadoError(
+    textoOriginal: string,
+    textoNormalizado: string,
+    etiquetaGrupo: string,
+    etiquetaAccion: string,
+    mensajeError: string
+  ): ResultadoInterpretacion {
+    return {
+      exito: false,
+      textoOriginal,
+      textoNormalizado,
+      comandoPayload: null,
+      comandosPayload: [],
+      sintaxisMA2: null,
+      sintaxisListaMA2: [],
+      resumenesComandos: [],
+      etiquetaGrupo,
+      etiquetaAccion,
+      etiquetaValor: '—',
+      mensajeError,
     };
   }
 
@@ -340,17 +694,14 @@ export class TraductorLuces {
     palabras: readonly string[],
     esBlackout: boolean
   ): ResolucionGrupoInterna {
-    // A. Detectar grupos del catálogo mencionados por sinónimo
     const gruposCatalogoCoincidentes = CATALOGO_GRUPOS.filter((grupo) =>
       grupo.sinonimos.some((sinonimo) => palabras.includes(sinonimo))
     );
 
-    // B. Detectar rangos numéricos: "grupos 1 al 3", "grupos 1 a 6", etc. (sin consumir porcentaje)
     const coincidenciaRango = /\bgrupos?\s+(\d+)\s*(?:al|a|hasta|thru|-)\s*(\d+)(?!\s*%)\b/.exec(
       textoNormalizado
     );
 
-    // C. Detectar grupos numéricos individuales o enumerados: "grupo 1", "grupos 1 y 2"
     const regexGrupoIndividual = /\bgrupos?\s+(\d+)\b/g;
     const gruposNumericos: string[] = [];
     let matchGrupo: RegExpExecArray | null;
@@ -359,11 +710,8 @@ export class TraductorLuces {
     }
 
     const tieneGruposEnumerados = /\bgrupos?\s+(\d+)\s*(?:y|,|e)\s*(\d+)\b/.test(textoNormalizado);
-
-    // D. Detectar palabras generales ("todos", "general", etc.)
     const tienePalabraGeneral = PALABRAS_GENERAL.some((palabra) => palabras.includes(palabra));
 
-    // Detección de ambigüedad por múltiples grupos
     if (gruposCatalogoCoincidentes.length > 1 || tieneGruposEnumerados) {
       return {
         exito: false,
@@ -409,7 +757,6 @@ export class TraductorLuces {
       };
     }
 
-    // Resolución de Rango
     if (coincidenciaRango !== null) {
       const inicio = Number(coincidenciaRango[1]);
       const fin = Number(coincidenciaRango[2]);
@@ -434,7 +781,6 @@ export class TraductorLuces {
       };
     }
 
-    // Resolución de Grupo Numérico Individual
     if (coincidenciaRango === null && gruposNumericos.length === 1) {
       const idGrupo = gruposNumericos[0];
       const grupoConocido = CATALOGO_GRUPOS.find((g) => g.id === idGrupo);
@@ -456,7 +802,6 @@ export class TraductorLuces {
       };
     }
 
-    // Resolución de Grupo por Sinónimo
     if (gruposCatalogoCoincidentes.length === 1) {
       const grupo = gruposCatalogoCoincidentes[0];
       let textoLimpio = textoNormalizado;
@@ -473,7 +818,6 @@ export class TraductorLuces {
       };
     }
 
-    // Resolución de Modo General / Blackout
     if (esBlackout || tienePalabraGeneral) {
       return {
         exito: true,
@@ -485,7 +829,8 @@ export class TraductorLuces {
 
     return {
       exito: false,
-      error: 'No se identificó el grupo o zona. Prueba indicando: frontales, contraluz, laterales, wash, móviles, público o "grupo 1".',
+      error:
+        'No se identificó el grupo o zona. Prueba indicando: frontales, contraluz, laterales, wash, móviles, público o "grupo 1".',
     };
   }
 
@@ -498,7 +843,6 @@ export class TraductorLuces {
     const tieneEncender = PALABRAS_ENCENDER.some((palabra) => palabras.includes(palabra));
     const tieneAjustar = PALABRAS_AJUSTAR.some((palabra) => palabras.includes(palabra));
 
-    // A. Detección de números malformados (múltiples puntos decimales, etc.)
     if (/\d+\.\d+\.\d+/.test(textoSinGrupo) || /\d+\.\./.test(textoSinGrupo) || /\.\.\d+/.test(textoSinGrupo)) {
       return {
         exito: false,
@@ -506,14 +850,13 @@ export class TraductorLuces {
       };
     }
 
-    // B. Búsqueda de valores numéricos de intensidad o porcentaje
     const matchPorcentaje = /(-?\d+(?:\.\d+)?)\s*%/.exec(textoSinGrupo);
     const matchNumero = /(?:^|\s)(-?\d+(?:\.\d+)?)(?:\s|$)/.exec(textoSinGrupo);
     const numeroCandidatoStr = matchPorcentaje ? matchPorcentaje[1] : matchNumero ? matchNumero[1] : null;
 
     if (numeroCandidatoStr !== null) {
       const numero = Number(numeroCandidatoStr);
-      if (!Number.isFinite(numero) || isNaN(numero)) {
+      if (!Number.isFinite(numero) || Number.isNaN(numero)) {
         return {
           exito: false,
           error: 'El valor de intensidad contiene un formato numérico malformado.',
@@ -527,7 +870,6 @@ export class TraductorLuces {
         };
       }
 
-      // Si se intentó apagar indicando un valor numérico superior a 0
       if (tieneApagar && numero > 0) {
         return {
           exito: false,
@@ -548,32 +890,30 @@ export class TraductorLuces {
       return { exito: true, accion: 'ajustar', valor: valorRedondeado };
     }
 
-    // C. Si tiene intención explícita de apagar
     if (tieneApagar) {
       return { exito: true, accion: 'apagar', valor: '0' };
     }
 
-    // D. Valores semánticos reconocidos ("mitad" / "medio")
     if (palabras.includes('mitad') || palabras.includes('medio')) {
       return { exito: true, accion: 'ajustar', valor: '50' };
     }
 
-    // E. Encender sin número explícito implica 100%
     if (tieneEncender) {
       return { exito: true, accion: 'encender', valor: '100' };
     }
 
-    // F. Órdenes relativas de ajuste (subir, bajar, etc.) SIN intensidad: NO asumir 50%
     if (tieneAjustar) {
       return {
         exito: false,
-        error: 'Especifica el nivel o porcentaje de intensidad para ajustar (ej. "subir frontales al 70%").',
+        error:
+          'Especifica el nivel o porcentaje de intensidad para ajustar (ej. "subir frontales al 70%").',
       };
     }
 
     return {
       exito: false,
-      error: 'Indica una acción o intensidad (ej. "encender", "apagar", "al 50%") o un color (ej. "rojo", "azul", "ámbar").',
+      error:
+        'Indica una acción o intensidad (ej. "encender", "apagar", "al 50%") o un color (ej. "rojo", "azul", "ámbar").',
     };
   }
 }

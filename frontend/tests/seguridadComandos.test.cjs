@@ -14,6 +14,7 @@ require.extensions['.ts'] = (module, filename) => {
 const { TraductorLuces } = require('../src/diccionario/TraductorLuces.ts');
 const {
   bloqueoDeSeguridad,
+  bloqueoDeSeguridadCompuesto,
   esComandoSeguro,
   validarRangoGrupos,
   validarValorIntensidad,
@@ -175,6 +176,42 @@ assert.equal(
 assert.equal(
   esComandoSeguro({ accion: 'ajustar', grupo: '1; Off 2', valor: '50', tipo: 'intensidad' }),
   false
+);
+
+// ---------------------------------------------------------
+// 12. Validación atómica de órdenes compuestas (todo o nada)
+// ---------------------------------------------------------
+const loteValido = TraductorLuces.interpretarOrden('frontales al 70% en azul');
+assert.equal(loteValido.exito, true);
+assert.equal(
+  bloqueoDeSeguridadCompuesto(loteValido.comandosPayload, loteValido.textoOriginal),
+  null
+);
+
+const loteMulti = TraductorLuces.interpretarOrden('frontales al 100% y contras apagadas');
+assert.equal(loteMulti.exito, true);
+assert.equal(
+  bloqueoDeSeguridadCompuesto(loteMulti.comandosPayload, loteMulti.textoOriginal),
+  null
+);
+
+assert.match(
+  bloqueoDeSeguridadCompuesto(
+    [
+      { accion: 'ajustar', grupo: '1', valor: '50', tipo: 'intensidad' },
+      { accion: 'ajustar', grupo: '2', valor: '150', tipo: 'intensidad' },
+    ],
+    'frontales al 50% y contras al 150%'
+  ),
+  /Sub-comando 2 bloqueado/
+);
+
+assert.match(
+  bloqueoDeSeguridadCompuesto(
+    [{ accion: 'ajustar', grupo: '1', valor: '50', tipo: 'intensidad' }],
+    'frontales al 50%; shutdown'
+  ),
+  /seguridad/
 );
 
 console.log('Todos los casos de seguridad del frontend: correctos');

@@ -7,6 +7,7 @@
     "build": "tsc",
     "watch": "tsc -w",
     "start": "npm run build && electron .",
+    "start:all": "npm --prefix frontend run build && npm run build && electron .",
     "test": "npm run build && node tests/constructorComandosMA2.test.cjs && npm --prefix frontend test"
   },
   "keywords": [],

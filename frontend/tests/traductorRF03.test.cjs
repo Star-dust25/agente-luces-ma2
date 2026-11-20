@@ -271,4 +271,60 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
   console.log('  ✓ 6. Compatibilidad IPC y los 9 colores de RF-05 (4.1 a 4.9): correcto');
 }
 
+// ============================================================================
+// 7. Órdenes compuestas (Intensidad + Color y Multi-cláusula con "y" / ",")
+// ============================================================================
+{
+  // A. Intensidad + Color sobre el mismo grupo en una sola frase
+  const ic1 = TraductorLuces.interpretarOrden('frontales al 70% en azul');
+  assert.equal(ic1.exito, true);
+  assert.deepEqual(ic1.comandosPayload, [
+    { accion: 'ajustar', grupo: '1', valor: '70', tipo: 'intensidad' },
+    { accion: 'color', grupo: '1', valor: '4.7', tipo: 'color' },
+  ]);
+  assert.deepEqual(ic1.sintaxisListaMA2, ['Group 1 At 70', 'Group 1 At Preset 4.7']);
+
+  const ic2 = TraductorLuces.interpretarOrden('pon frontales en rojo al 80%');
+  assert.equal(ic2.exito, true);
+  assert.deepEqual(ic2.comandosPayload, [
+    { accion: 'ajustar', grupo: '1', valor: '80', tipo: 'intensidad' },
+    { accion: 'color', grupo: '1', valor: '4.2', tipo: 'color' },
+  ]);
+
+  const ic3 = TraductorLuces.interpretarOrden('encender contras en blanco');
+  assert.equal(ic3.exito, true);
+  assert.deepEqual(ic3.comandosPayload, [
+    { accion: 'encender', grupo: '2', valor: '100', tipo: 'intensidad' },
+    { accion: 'color', grupo: '2', valor: '4.1', tipo: 'color' },
+  ]);
+
+  // B. Multi-cláusula separada por " y " y ","
+  const mc1 = TraductorLuces.interpretarOrden('frontales al 100% y contras apagadas');
+  assert.equal(mc1.exito, true);
+  assert.deepEqual(mc1.comandosPayload, [
+    { accion: 'ajustar', grupo: '1', valor: '100', tipo: 'intensidad' },
+    { accion: 'apagar', grupo: '2', valor: '0', tipo: 'intensidad' },
+  ]);
+
+  const mc2 = TraductorLuces.interpretarOrden('frontales al 50%, contras en rojo');
+  assert.equal(mc2.exito, true);
+  assert.deepEqual(mc2.comandosPayload, [
+    { accion: 'ajustar', grupo: '1', valor: '50', tipo: 'intensidad' },
+    { accion: 'color', grupo: '2', valor: '4.2', tipo: 'color' },
+  ]);
+
+  // C. Rechazo atómico (todo o nada) cuando una cláusula falla o contiene inyección
+  const rechazo1 = TraductorLuces.interpretarOrden('frontales al 50% y contras al 150%');
+  assert.equal(rechazo1.exito, false);
+  assert.equal(rechazo1.comandosPayload.length, 0);
+  assert.match(rechazo1.mensajeError, /0 y 100%/i);
+
+  const rechazoInyeccion = TraductorLuces.interpretarOrden('frontales al 50%; shutdown');
+  assert.equal(rechazoInyeccion.exito, false);
+  assert.equal(rechazoInyeccion.comandosPayload.length, 0);
+  assert.match(rechazoInyeccion.mensajeError, /seguridad/i);
+
+  console.log('  ✓ 7. Órdenes compuestas y rechazo atómico (todo o nada): correcto');
+}
+
 console.log('\nTodos los casos de prueba de RF-03 pasaron exitosamente.');
