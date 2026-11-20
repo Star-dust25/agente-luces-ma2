@@ -112,6 +112,16 @@ async function probar() {
     assert.equal(await pendienteCambio, false);
     await esperar(() => clienteEnCola.obtenerEstado() === 'AUTENTICADO', 'nuevo destino autenticado');
     assert.equal(nuevoDestino.lineas.includes('Off Executor 2'), false);
+
+    // Un cambio no crítico (sin alterar host, puerto, usuario ni contraseña) no debe vaciar cola ni reconectar estando sin autenticar.
+    for (const socket of nuevoDestino.sockets) socket.destroy();
+    await esperar(() => clienteEnCola.obtenerEstado() !== 'AUTENTICADO', 'pérdida de sesión controlada');
+    const conexionesPrevias = nuevoDestino.conexiones;
+    const pendienteNoCritico = clienteEnCola.enviarComando('Go Executor 9');
+    clienteEnCola.actualizarConfiguracionConexion({ host: '127.0.0.1', puerto: nuevoDestino.puerto, usuario: 'qa', contrasena: 'prueba' });
+    await esperar(() => clienteEnCola.obtenerEstado() === 'AUTENTICADO' && nuevoDestino.lineas.includes('Go Executor 9'), 'cola preservada ante cambio no crítico');
+    assert.equal(await pendienteNoCritico, true);
+    assert.ok(nuevoDestino.conexiones >= conexionesPrevias);
   } finally {
     clienteEnCola.desconectar();
     await sinAutenticar.cerrar();

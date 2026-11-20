@@ -252,7 +252,7 @@ export function construirComandosRestauracion(
       tipo: 'intensidad',
     });
 
-    if (estado.colorPreset !== null && estado.intensidad > 0) {
+    if (estado.colorPreset !== null) {
       comandos.push({
         accion: 'color',
         grupo: estado.id,

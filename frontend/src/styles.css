@@ -69,6 +69,7 @@ input:focus-visible {
   --negro: #dde1e7;
   --blanco: #111827;
   --gris-acero: #4b5563;
+  --ambar-alerta: #92400e;
   --cristal-bg: rgba(238, 240, 244, 0.86);
   --cristal-borde: rgba(15, 23, 42, 0.12);
   --cristal-hover: rgba(15, 23, 42, 0.06);
@@ -546,6 +547,7 @@ input:focus-visible {
 .rueda-panel[data-tema='dia'] {
   --blanco: #111827;
   --gris-acero: #4b5563;
+  --ambar-alerta: #92400e;
   --cristal-borde: rgba(15, 23, 42, 0.18);
   --superficie-sutil: rgba(15, 23, 42, 0.045);
   background: #eef0f4;
@@ -864,6 +866,15 @@ input:focus-visible {
 .badge-voz-modo {
   margin-left: auto;
   font-size: 0.7rem;
+}
+
+.progreso-voz-texto {
+  font-size: 0.7rem;
+  color: var(--ambar-alerta);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Cuadrícula simétrica 2x2 para ejemplos y fila limpia para sugerencias */

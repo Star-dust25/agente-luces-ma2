@@ -104,6 +104,16 @@ assert.deepEqual(comandosRestauracion, [
 ]);
 assert.equal(bloqueoDeSeguridadCompuesto(comandosRestauracion), null);
 
+// Deshacer debe restaurar el preset de color aunque el grupo estuviera apagado (intensidad 0)
+const comandosRestauracionApagadoConColor = construirComandosRestauracion([
+  { id: '3', nombre: 'Laterales', intensidad: 0, colorNombre: 'Rojo Carmesí', colorHex: '#ef4444', colorPreset: '4.2' },
+]);
+assert.deepEqual(comandosRestauracionApagadoConColor, [
+  { accion: 'apagar', grupo: '3', valor: '0', tipo: 'intensidad' },
+  { accion: 'color', grupo: '3', valor: '4.2', tipo: 'color' },
+]);
+assert.equal(bloqueoDeSeguridadCompuesto(comandosRestauracionApagadoConColor), null);
+
 // Verificar tope de MAX_PASOS_DESHACER (20)
 let pila = [];
 for (let i = 1; i <= 25; i += 1) {

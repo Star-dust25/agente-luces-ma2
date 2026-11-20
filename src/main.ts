@@ -40,6 +40,7 @@ export const CANALES_IPC = {
   OBTENER_CONFIG: 'ma2:obtener-config',
   GUARDAR_CONFIG: 'ma2:guardar-config',
   TRANSCRIBIR_AUDIO: 'ma2:transcribir-audio',
+  PROGRESO_VOZ: 'ma2:progreso-voz',
 } as const;
 
 /**
@@ -248,6 +249,12 @@ class ControladorPrincipalMA2 {
       this.ventanaPrincipal.webContents.send(CANALES_IPC.CAMBIO_ESTADO, estado);
     }
   }
+
+  public notificarProgresoVozAlFrontend(mensaje: string): void {
+    if (this.ventanaPrincipal !== null && !this.ventanaPrincipal.isDestroyed()) {
+      this.ventanaPrincipal.webContents.send(CANALES_IPC.PROGRESO_VOZ, mensaje);
+    }
+  }
 }
 
 /**
@@ -278,8 +285,10 @@ function arrancarAplicacion(): void {
 
       const constructorComandos = new ConstructorComandosMA2();
       const clienteTelnet = new ClienteTelnetMA2(constructorComandos, configInicial.conexion);
-      const rutaCacheVoz = path.join(__dirname, '..', '.cache-modelos-voz');
-      const servicioVoz = new ServicioVozLocal(rutaCacheVoz);
+      const rutaCacheVoz = path.join(app.getPath('userData'), 'cache-modelos-voz');
+      const servicioVoz = new ServicioVozLocal(rutaCacheVoz, null, (mensaje: string) => {
+        controladorPrincipal?.notificarProgresoVozAlFrontend(mensaje);
+      });
 
       controladorPrincipal = new ControladorPrincipalMA2(
         clienteTelnet,

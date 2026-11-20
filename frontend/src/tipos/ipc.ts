@@ -109,6 +109,7 @@ export interface ApiPuenteMA2 {
   readonly suscribirEstadoConexion: (
     observador: (estado: EstadoConexionMA2) => void
   ) => () => void;
+  readonly suscribirProgresoVoz: (observador: (mensaje: string) => void) => () => void;
   readonly obtenerConfiguracion: () => Promise<ConfiguracionSistemaMA2>;
   readonly guardarConfiguracion: (
     config: ConfiguracionSistemaMA2

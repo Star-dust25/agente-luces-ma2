@@ -139,13 +139,19 @@ function crearMapaGruposDesdeConfig(
   const mapa: Record<string, InstantaneaGrupo> = {};
   for (const g of config.grupos) {
     const previo = actual?.[g.id];
+    const presetPrevio = previo?.colorPreset ?? null;
+    const colorActualizado =
+      presetPrevio !== null
+        ? config.colores.find((color) => color.preset === presetPrevio)
+        : undefined;
+
     mapa[g.id] = {
       id: g.id,
       nombre: g.nombre,
       intensidad: previo?.intensidad ?? 0,
-      colorNombre: previo?.colorNombre ?? null,
-      colorHex: previo?.colorHex ?? null,
-      colorPreset: previo?.colorPreset ?? null,
+      colorNombre: colorActualizado?.nombre ?? null,
+      colorHex: colorActualizado?.hex ?? null,
+      colorPreset: colorActualizado?.preset ?? null,
     };
   }
   return mapa;
@@ -217,6 +223,7 @@ export default function App() {
 
   const [estadoVoz, setEstadoVoz] = useState<EstadoVoz>('inactivo');
   const [nivelVoz, setNivelVoz] = useState<number>(0);
+  const [progresoVoz, setProgresoVoz] = useState<string | null>(null);
 
   const gruposRef = useRef<Record<string, InstantaneaGrupo>>(grupos);
   gruposRef.current = grupos;
@@ -378,9 +385,19 @@ export default function App() {
     if (window.api === undefined) {
       return undefined;
     }
-    return window.api.suscribirEstadoConexion((nuevoEstado) => {
+    const desuscribirEstado = window.api.suscribirEstadoConexion((nuevoEstado) => {
       setEstadoConexion(nuevoEstado);
     });
+    const desuscribirProgresoVoz =
+      typeof window.api.suscribirProgresoVoz === 'function'
+        ? window.api.suscribirProgresoVoz((mensaje) => {
+            setProgresoVoz(mensaje);
+          })
+        : () => {};
+    return () => {
+      desuscribirEstado();
+      desuscribirProgresoVoz();
+    };
   }, [sincronizar]);
 
   useEffect(() => {
@@ -646,12 +663,14 @@ export default function App() {
 
     try {
       setNivelVoz(0);
+      setProgresoVoz(null);
       await grabadoraRef.current.iniciar((nivel) => setNivelVoz(nivel));
       setEstadoVoz('escuchando');
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       setEstadoVoz('inactivo');
       setNivelVoz(0);
+      setProgresoVoz(null);
       lanzarToast('error', 'Micrófono no disponible', msg);
       registrarLog({
         nivel: 'error',
@@ -716,6 +735,7 @@ export default function App() {
     } finally {
       setEstadoVoz('inactivo');
       setNivelVoz(0);
+      setProgresoVoz(null);
     }
   }, [ejecutarOrdenDesdeTexto, lanzarToast, registrarLog]);
 
@@ -742,6 +762,37 @@ export default function App() {
     if (duracionPresion >= 320 && estadoVozRef.current === 'escuchando') {
       void detenerYTranscribirVoz();
     }
+  };
+
+  const manejarPointerCancelMic = () => {
+    if (inicioPresionMicRef.current === null && estadoVozRef.current !== 'escuchando') {
+      return;
+    }
+    inicioPresionMicRef.current = null;
+    void grabadoraRef.current?.cancelar();
+    setEstadoVoz('inactivo');
+    setNivelVoz(0);
+    setProgresoVoz(null);
+  };
+
+  const manejarKeyDownMic = (evento: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (evento.altKey || evento.repeat) {
+      return;
+    }
+    if (evento.key !== 'Enter' && evento.key !== ' ') {
+      return;
+    }
+    evento.preventDefault();
+    if (estadoVozRef.current === 'transcribiendo') {
+      return;
+    }
+    if (estadoVozRef.current === 'escuchando') {
+      inicioPresionMicRef.current = null;
+      void detenerYTranscribirVoz();
+      return;
+    }
+    inicioPresionMicRef.current = null;
+    void iniciarGrabacionVoz();
   };
 
   // Atajos globales de teclado + Alt+Espacio Push-to-Talk
@@ -1432,6 +1483,8 @@ export default function App() {
                     className={`boton-microfono ${estadoVoz}`}
                     onPointerDown={manejarPointerDownMic}
                     onPointerUp={manejarPointerUpMic}
+                    onPointerCancel={manejarPointerCancelMic}
+                    onKeyDown={manejarKeyDownMic}
                     disabled={estadoVoz === 'transcribiendo'}
                     title="Clic para iniciar/detener o mantén presionado (Push-to-Talk · Alt+Espacio)"
                   >
@@ -1454,6 +1507,12 @@ export default function App() {
                         style={{ width: `${nivelVoz}%` }}
                       />
                     </div>
+                  )}
+
+                  {estadoVoz === 'transcribiendo' && progresoVoz !== null && (
+                    <span className="progreso-voz-texto" role="status" title={progresoVoz}>
+                      {progresoVoz}
+                    </span>
                   )}
 
                   <span className="texto-gris badge-voz-modo">

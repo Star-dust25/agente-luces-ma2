@@ -18,6 +18,7 @@ export interface ApiPuenteMA2 {
   readonly suscribirEstadoConexion: (
     observador: (estado: EstadoConexionMA2) => void
   ) => () => void;
+  readonly suscribirProgresoVoz: (observador: (mensaje: string) => void) => () => void;
   readonly obtenerConfiguracion: () => Promise<ConfiguracionSistemaMA2>;
   readonly guardarConfiguracion: (
     config: ConfiguracionSistemaMA2
@@ -49,6 +50,15 @@ const puenteApi: ApiPuenteMA2 = {
     ipcRenderer.on('ma2:estado-conexion', manejador);
     return () => {
       ipcRenderer.removeListener('ma2:estado-conexion', manejador);
+    };
+  },
+  suscribirProgresoVoz: (observador: (mensaje: string) => void): (() => void) => {
+    const manejador = (_evento: IpcRendererEvent, mensaje: string): void => {
+      observador(mensaje);
+    };
+    ipcRenderer.on('ma2:progreso-voz', manejador);
+    return () => {
+      ipcRenderer.removeListener('ma2:progreso-voz', manejador);
     };
   },
   obtenerConfiguracion: (): Promise<ConfiguracionSistemaMA2> => {

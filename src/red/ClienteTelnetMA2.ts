@@ -139,7 +139,7 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
       ...nuevaConfig,
     };
 
-    if (!cambioCritico && this.estaListoParaEnviar()) {
+    if (!cambioCritico) {
       return;
     }
 
