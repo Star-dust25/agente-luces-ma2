@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { ModalAjustes } from './componentes/ModalAjustes';
 import {
   CATALOGO_COLORES,
   CATALOGO_GRUPOS,
@@ -8,6 +9,7 @@ import {
   type ResultadoInterpretacion,
 } from './diccionario/TraductorLuces';
 import { bloqueoDeSeguridadCompuesto } from './seguridadComandos';
+import { GrabadoraVozCabina } from './servicios/capturaAudio';
 import {
   alternarSeleccionGrupo,
   capturarInstantaneaAfectados,
@@ -23,11 +25,13 @@ import {
 } from './servicios/operacionesCabina';
 import type {
   ComandoLuces,
+  ConfiguracionSistemaMA2,
   EstadoConexionMA2,
   RespuestaComandoIPC,
 } from './tipos/ipc';
 
 type NivelLog = 'info' | 'exito' | 'advertencia' | 'error';
+type EstadoVoz = 'inactivo' | 'escuchando' | 'transcribiendo';
 
 interface RegistroLog {
   readonly id: string;
@@ -56,11 +60,27 @@ interface OpcionesDespacho {
   readonly registrarDeshacer?: boolean;
 }
 
+const CONFIGURACION_POR_DEFECTO_UI: ConfiguracionSistemaMA2 = {
+  conexion: {
+    host: '127.0.0.1',
+    puerto: 30000,
+    usuario: 'administrator',
+    contrasena: 'admin',
+  },
+  executorPorDefecto: 1,
+  grupos: CATALOGO_GRUPOS,
+  colores: CATALOGO_COLORES,
+  interfaz: {
+    tema: 'cabina',
+    autoEjecutarVoz: false,
+  },
+};
+
 const EJEMPLOS_RAPIDOS = [
   'Frontales al 70% en azul',
   'Frontales al 100% y contras apagadas',
-  'Contraluz en rojo',
-  'Apagar frontales',
+  'Siguiente escena',
+  'Ir a escena 3',
 ] as const;
 
 const NIVELES_RAPIDOS = [0, 25, 50, 75, 100] as const;
@@ -111,19 +131,23 @@ function crearId(prefijo: string): string {
   return `${prefijo}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function inicializarGrupos(): Record<string, InstantaneaGrupo> {
-  const inicial: Record<string, InstantaneaGrupo> = {};
-  for (const g of CATALOGO_GRUPOS) {
-    inicial[g.id] = {
+function crearMapaGruposDesdeConfig(
+  config: ConfiguracionSistemaMA2,
+  actual?: Readonly<Record<string, InstantaneaGrupo>>
+): Record<string, InstantaneaGrupo> {
+  const mapa: Record<string, InstantaneaGrupo> = {};
+  for (const g of config.grupos) {
+    const previo = actual?.[g.id];
+    mapa[g.id] = {
       id: g.id,
       nombre: g.nombre,
-      intensidad: 0,
-      colorNombre: null,
-      colorHex: null,
-      colorPreset: null,
+      intensidad: previo?.intensidad ?? 0,
+      colorNombre: previo?.colorNombre ?? null,
+      colorHex: previo?.colorHex ?? null,
+      colorPreset: previo?.colorPreset ?? null,
     };
   }
-  return inicial;
+  return mapa;
 }
 
 function posicionarMenu(x: number, y: number): { left: number; top: number } {
@@ -134,6 +158,22 @@ function posicionarMenu(x: number, y: number): { left: number; top: number } {
 }
 
 function construirSintaxisDesdePayload(payload: ComandoLuces): string {
+  if (payload.tipo === 'cue') {
+    const exec = payload.executor ?? payload.grupo;
+    switch (payload.accion) {
+      case 'siguiente':
+        return `Go Executor ${exec}`;
+      case 'anterior':
+        return `GoBack Executor ${exec}`;
+      case 'detener':
+        return `Off Executor ${exec}`;
+      case 'ir_cue':
+        return `Goto Cue ${payload.valor} Executor ${exec}`;
+      default:
+        return `Go Executor ${exec}`;
+    }
+  }
+
   if (payload.tipo === 'color') {
     const preset = payload.valor.includes('.') ? payload.valor : `4.${payload.valor}`;
     return `Group ${payload.grupo} At Preset ${preset}`;
@@ -145,8 +185,17 @@ function construirSintaxisDesdePayload(payload: ComandoLuces): string {
 export default function App() {
   const esElectron = typeof window !== 'undefined' && window.api !== undefined;
 
+  const [configuracion, setConfiguracion] = useState<ConfiguracionSistemaMA2>(
+    CONFIGURACION_POR_DEFECTO_UI
+  );
+  const [modalAjustesAbierto, setModalAjustesAbierto] = useState<boolean>(false);
+  const [guardandoAjustes, setGuardandoAjustes] = useState<boolean>(false);
+
   const [orden, setOrden] = useState<string>('');
-  const [grupos, setGrupos] = useState<Record<string, InstantaneaGrupo>>(inicializarGrupos);
+  const [cueNumeroInput, setCueNumeroInput] = useState<string>('1');
+  const [grupos, setGrupos] = useState<Record<string, InstantaneaGrupo>>(() =>
+    crearMapaGruposDesdeConfig(CONFIGURACION_POR_DEFECTO_UI)
+  );
   const [gruposSeleccionados, setGruposSeleccionados] = useState<readonly string[]>(['1']);
   const [valorSlider, setValorSlider] = useState<number>(0);
   const [estadoConexion, setEstadoConexion] = useState<EstadoConexionMA2 | 'WEB'>(
@@ -164,14 +213,28 @@ export default function App() {
   const [borradorTemporal, setBorradorTemporal] = useState<string>('');
   const [sugerenciasOcultas, setSugerenciasOcultas] = useState<boolean>(false);
 
+  const [estadoVoz, setEstadoVoz] = useState<EstadoVoz>('inactivo');
+  const [nivelVoz, setNivelVoz] = useState<number>(0);
+
   const gruposRef = useRef<Record<string, InstantaneaGrupo>>(grupos);
   gruposRef.current = grupos;
+
+  const configuracionRef = useRef<ConfiguracionSistemaMA2>(configuracion);
+  configuracionRef.current = configuracion;
+
+  const grabadoraRef = useRef<GrabadoraVozCabina | null>(null);
+  const inicioPresionMicRef = useRef<number | null>(null);
+  const estadoVozRef = useRef<EstadoVoz>(estadoVoz);
+  estadoVozRef.current = estadoVoz;
 
   const timersRef = useRef<Map<string, number>>(new Map());
   const timerBlackoutRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const enviandoRef = useRef(false);
   const ultimoIntentoRef = useRef<{ clave: string; instante: number } | null>(null);
+
+  const catalogoGruposActual = configuracion.grupos;
+  const catalogoColoresActual = configuracion.colores;
 
   const interpretacion = useMemo<ResultadoInterpretacion | null>(() => {
     if (orden.trim().length === 0) {
@@ -197,23 +260,23 @@ export default function App() {
       }
     }
     return resultado;
-  }, [orden]);
+  }, [orden, configuracion]);
 
   const sugerenciasActivas = useMemo<readonly string[]>(() => {
     if (sugerenciasOcultas || orden.trim().length === 0) {
       return [];
     }
     return TraductorLuces.generarSugerencias(orden, 3);
-  }, [orden, sugerenciasOcultas]);
+  }, [orden, sugerenciasOcultas, configuracion]);
 
   const resumenSeleccion = useMemo(
-    () => formatearResumenSeleccion(gruposSeleccionados, CATALOGO_GRUPOS),
-    [gruposSeleccionados]
+    () => formatearResumenSeleccion(gruposSeleccionados, catalogoGruposActual),
+    [gruposSeleccionados, catalogoGruposActual]
   );
 
   const todosSeleccionados = useMemo(
-    () => esSeleccionCompleta(gruposSeleccionados, CATALOGO_GRUPOS.length),
-    [gruposSeleccionados]
+    () => esSeleccionCompleta(gruposSeleccionados, catalogoGruposActual.length),
+    [gruposSeleccionados, catalogoGruposActual.length]
   );
 
   const colorActivoSeleccion = useMemo(() => {
@@ -237,6 +300,16 @@ export default function App() {
     };
   }, [grupos, gruposSeleccionados]);
 
+  const aplicarConfiguracionEnMemoria = useCallback((config: ConfiguracionSistemaMA2) => {
+    setConfiguracion(config);
+    TraductorLuces.configurarCatalogoDinamico({
+      grupos: config.grupos,
+      colores: config.colores,
+      executorPorDefecto: config.executorPorDefecto,
+    });
+    setGrupos((prev) => crearMapaGruposDesdeConfig(config, prev));
+  }, []);
+
   const seleccionarGrupos = useCallback((nuevosIds: readonly string[]) => {
     setGruposSeleccionados(nuevosIds);
     const idReferencia = nuevosIds[0];
@@ -251,7 +324,7 @@ export default function App() {
     const timer = window.setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
       timersRef.current.delete(id);
-    }, 3600);
+    }, 3800);
     timersRef.current.set(id, timer);
   }, []);
 
@@ -273,16 +346,18 @@ export default function App() {
       setCargando(true);
       try {
         if (window.api !== undefined) {
-          const [estado] = await Promise.all([
+          const [estado, configPersistida] = await Promise.all([
             window.api.obtenerEstadoConexion(),
-            new Promise<void>((r) => window.setTimeout(r, 380)),
+            window.api.obtenerConfiguracion(),
+            new Promise<void>((r) => window.setTimeout(r, 320)),
           ]);
           setEstadoConexion(estado);
+          aplicarConfiguracionEnMemoria(configPersistida);
           if (notificar) {
             lanzarToast('exito', 'Consola sincronizada', `Estado Telnet: ${estado}`);
           }
         } else {
-          await new Promise<void>((r) => window.setTimeout(r, 380));
+          await new Promise<void>((r) => window.setTimeout(r, 320));
           setEstadoConexion('WEB');
           if (notificar) {
             lanzarToast('info', 'Modo Simulador Web', 'Ejecuta Electron para conexión TCP real.');
@@ -292,7 +367,7 @@ export default function App() {
         setCargando(false);
       }
     },
-    [lanzarToast]
+    [aplicarConfiguracionEnMemoria, lanzarToast]
   );
 
   useEffect(() => {
@@ -321,47 +396,6 @@ export default function App() {
     };
   }, [menu]);
 
-  // Atajos globales de teclado para cabina en vivo (sin interferir al escribir)
-  useEffect(() => {
-    const manejarAtajosGlobales = (evento: KeyboardEvent) => {
-      const objetivo = evento.target as HTMLElement | null;
-      const enCampoTexto =
-        objetivo !== null &&
-        (objetivo.tagName === 'TEXTAREA' ||
-          objetivo.tagName === 'INPUT' ||
-          objetivo.isContentEditable);
-
-      if ((evento.ctrlKey || evento.metaKey) && evento.key.toLowerCase() === 'k') {
-        evento.preventDefault();
-        inputRef.current?.focus();
-        return;
-      }
-
-      if (evento.key === '/' && !enCampoTexto && !evento.altKey && !evento.ctrlKey && !evento.metaKey) {
-        evento.preventDefault();
-        inputRef.current?.focus();
-        return;
-      }
-
-      if (evento.altKey && !evento.ctrlKey && !evento.metaKey) {
-        if (/^[1-6]$/.test(evento.key)) {
-          evento.preventDefault();
-          seleccionarGrupos([evento.key]);
-          return;
-        }
-        if (evento.key === '0') {
-          evento.preventDefault();
-          seleccionarGrupos(CATALOGO_GRUPOS.map((g) => g.id));
-        }
-      }
-    };
-
-    window.addEventListener('keydown', manejarAtajosGlobales);
-    return () => {
-      window.removeEventListener('keydown', manejarAtajosGlobales);
-    };
-  }, [seleccionarGrupos]);
-
   useEffect(() => {
     const timers = timersRef.current;
     return () => {
@@ -372,11 +406,16 @@ export default function App() {
       if (timerBlackoutRef.current !== null) {
         window.clearTimeout(timerBlackoutRef.current);
       }
+      void grabadoraRef.current?.cancelar();
     };
   }, []);
 
   const actualizarEstadoGrupoLocal = useCallback(
     (payload: ComandoLuces, color?: DefinicionColorMA2) => {
+      if (payload.tipo === 'cue') {
+        return;
+      }
+
       const ids = expandirIdsGrupo(payload.grupo);
       setGrupos((prev) => {
         const copia = { ...prev };
@@ -384,7 +423,9 @@ export default function App() {
           const actual = copia[id];
           if (actual === undefined) continue;
           if (payload.tipo === 'color') {
-            const c = color ?? CATALOGO_COLORES.find((item) => item.preset === payload.valor);
+            const c =
+              color ??
+              configuracionRef.current.colores.find((item) => item.preset === payload.valor);
             copia[id] = {
               ...actual,
               intensidad: actual.intensidad === 0 ? 100 : actual.intensidad,
@@ -436,14 +477,16 @@ export default function App() {
       if (
         registrarDeshacer &&
         ultimoIntentoRef.current?.clave === clave &&
-        ahora - ultimoIntentoRef.current.instante < 500
+        ahora - ultimoIntentoRef.current.instante < 450
       ) {
         return false;
       }
 
-      const instantaneaPrevia = registrarDeshacer
-        ? capturarInstantaneaAfectados(gruposRef.current, comandos)
-        : [];
+      const comandosConGrupos = comandos.filter((c) => c.tipo !== 'cue');
+      const instantaneaPrevia =
+        registrarDeshacer && comandosConGrupos.length > 0
+          ? capturarInstantaneaAfectados(gruposRef.current, comandosConGrupos)
+          : [];
 
       ultimoIntentoRef.current = { clave, instante: ahora };
       enviandoRef.current = true;
@@ -530,35 +573,215 @@ export default function App() {
     [actualizarEstadoGrupoLocal, lanzarToast, registrarLog]
   );
 
+  const ejecutarOrdenDesdeTexto = useCallback(
+    async (textoAProcesar: string) => {
+      const res = TraductorLuces.interpretarOrden(textoAProcesar);
+      if (!res.exito || res.comandosPayload.length === 0) {
+        const msg = res.mensajeError ?? 'No se pudo interpretar la instrucción.';
+        lanzarToast('advertencia', 'Orden incompleta', msg);
+        return;
+      }
+
+      const titulo =
+        res.comandosPayload.length > 1
+          ? `${res.etiquetaAccion} (${res.comandosPayload.length})`
+          : `${res.etiquetaAccion} · ${res.etiquetaGrupo}`;
+
+      const exitoEnvio = await despacharLoteComandos(res.comandosPayload, titulo, {
+        textoOriginal: res.textoOriginal,
+      });
+
+      if (exitoEnvio && res.textoOriginal.length > 0) {
+        setHistorialOrdenes((prev) => {
+          if (prev[0] === res.textoOriginal) {
+            return prev;
+          }
+          return [res.textoOriginal, ...prev.slice(0, 24)];
+        });
+        setIndiceHistorial(-1);
+        setBorradorTemporal('');
+        setSugerenciasOcultas(true);
+      }
+    },
+    [despacharLoteComandos, lanzarToast]
+  );
+
   const procesarFormulario = useCallback(async () => {
-    const res = interpretacion ?? TraductorLuces.interpretarOrden(orden);
-    if (!res.exito || res.comandosPayload.length === 0) {
-      const msg = res.mensajeError ?? 'No se pudo interpretar la instrucción.';
-      lanzarToast('advertencia', 'Orden incompleta', msg);
+    await ejecutarOrdenDesdeTexto(orden);
+  }, [ejecutarOrdenDesdeTexto, orden]);
+
+  // Control por voz local (Push-to-Talk y clic para iniciar/detener)
+  const iniciarGrabacionVoz = useCallback(async () => {
+    if (estadoVozRef.current !== 'inactivo') {
       return;
     }
 
-    const titulo =
-      res.comandosPayload.length > 1
-        ? `${res.etiquetaAccion} (${res.comandosPayload.length})`
-        : `${res.etiquetaAccion} · ${res.etiquetaGrupo}`;
-
-    const exitoEnvio = await despacharLoteComandos(res.comandosPayload, titulo, {
-      textoOriginal: res.textoOriginal,
-    });
-
-    if (exitoEnvio && res.textoOriginal.length > 0) {
-      setHistorialOrdenes((prev) => {
-        if (prev[0] === res.textoOriginal) {
-          return prev;
-        }
-        return [res.textoOriginal, ...prev.slice(0, 24)];
-      });
-      setIndiceHistorial(-1);
-      setBorradorTemporal('');
-      setSugerenciasOcultas(true);
+    if (grabadoraRef.current === null) {
+      grabadoraRef.current = new GrabadoraVozCabina();
     }
-  }, [despacharLoteComandos, interpretacion, lanzarToast, orden]);
+
+    try {
+      setNivelVoz(0);
+      await grabadoraRef.current.iniciar((nivel) => setNivelVoz(nivel));
+      setEstadoVoz('escuchando');
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setEstadoVoz('inactivo');
+      setNivelVoz(0);
+      lanzarToast('error', 'Micrófono no disponible', msg);
+      registrarLog({
+        nivel: 'error',
+        titulo: 'Error de micrófono',
+        sintaxisMA2: null,
+        comandosPayload: [],
+        textoOriginal: null,
+      });
+    }
+  }, [lanzarToast, registrarLog]);
+
+  const detenerYTranscribirVoz = useCallback(async () => {
+    if (estadoVozRef.current !== 'escuchando' || grabadoraRef.current === null) {
+      return;
+    }
+
+    setEstadoVoz('transcribiendo');
+    setNivelVoz(0);
+
+    try {
+      const muestras16k = await grabadoraRef.current.detener();
+
+      if (window.api === undefined) {
+        lanzarToast(
+          'advertencia',
+          'Transcripción local requiere Electron',
+          'En navegador web usa entrada por texto; abre en Electron para usar el motor Whisper offline.'
+        );
+        return;
+      }
+
+      const resultado = await window.api.transcribirAudio(muestras16k);
+      if (!resultado.exito || resultado.texto.trim().length === 0) {
+        lanzarToast('advertencia', 'Sin transcripción válida', resultado.mensaje);
+        registrarLog({
+          nivel: 'advertencia',
+          titulo: 'Voz no procesada',
+          sintaxisMA2: null,
+          comandosPayload: [],
+          textoOriginal: null,
+        });
+        return;
+      }
+
+      const textoTranscrito = resultado.texto.trim();
+      setOrden(textoTranscrito);
+      setSugerenciasOcultas(true);
+      inputRef.current?.focus();
+
+      if (configuracionRef.current.interfaz.autoEjecutarVoz) {
+        await ejecutarOrdenDesdeTexto(textoTranscrito);
+      } else {
+        lanzarToast(
+          'info',
+          `Voz transcrita (${resultado.duracionMs} ms)`,
+          `"${textoTranscrito}" — Revisa y presiona Enter para ejecutar.`
+        );
+      }
+    } catch (error: unknown) {
+      const detalle = error instanceof Error ? error.message : String(error);
+      lanzarToast('error', 'Error al transcribir audio', detalle);
+    } finally {
+      setEstadoVoz('inactivo');
+      setNivelVoz(0);
+    }
+  }, [ejecutarOrdenDesdeTexto, lanzarToast, registrarLog]);
+
+  const manejarPointerDownMic = () => {
+    if (estadoVoz === 'transcribiendo') {
+      return;
+    }
+    if (estadoVoz === 'escuchando') {
+      inicioPresionMicRef.current = null;
+      void detenerYTranscribirVoz();
+      return;
+    }
+    inicioPresionMicRef.current = Date.now();
+    void iniciarGrabacionVoz();
+  };
+
+  const manejarPointerUpMic = () => {
+    if (inicioPresionMicRef.current === null) {
+      return;
+    }
+    const duracionPresion = Date.now() - inicioPresionMicRef.current;
+    inicioPresionMicRef.current = null;
+    // Si mantuvo presionado >= 320 ms funciona como Push-to-Talk al soltar
+    if (duracionPresion >= 320 && estadoVozRef.current === 'escuchando') {
+      void detenerYTranscribirVoz();
+    }
+  };
+
+  // Atajos globales de teclado + Alt+Espacio Push-to-Talk
+  useEffect(() => {
+    const manejarAtajosGlobales = (evento: KeyboardEvent) => {
+      if (modalAjustesAbierto) {
+        return;
+      }
+
+      if (evento.altKey && evento.code === 'Space') {
+        evento.preventDefault();
+        if (!evento.repeat && estadoVozRef.current === 'inactivo') {
+          void iniciarGrabacionVoz();
+        }
+        return;
+      }
+
+      const objetivo = evento.target as HTMLElement | null;
+      const enCampoTexto =
+        objetivo !== null &&
+        (objetivo.tagName === 'TEXTAREA' ||
+          objetivo.tagName === 'INPUT' ||
+          objetivo.isContentEditable);
+
+      if ((evento.ctrlKey || evento.metaKey) && evento.key.toLowerCase() === 'k') {
+        evento.preventDefault();
+        inputRef.current?.focus();
+        return;
+      }
+
+      if (evento.key === '/' && !enCampoTexto && !evento.altKey && !evento.ctrlKey && !evento.metaKey) {
+        evento.preventDefault();
+        inputRef.current?.focus();
+        return;
+      }
+
+      if (evento.altKey && !evento.ctrlKey && !evento.metaKey) {
+        if (/^[1-6]$/.test(evento.key)) {
+          evento.preventDefault();
+          seleccionarGrupos([evento.key]);
+          return;
+        }
+        if (evento.key === '0') {
+          evento.preventDefault();
+          seleccionarGrupos(configuracionRef.current.grupos.map((g) => g.id));
+        }
+      }
+    };
+
+    const manejarSoltarPushToTalk = (evento: KeyboardEvent) => {
+      if ((evento.code === 'Space' || evento.key === 'Alt') && estadoVozRef.current === 'escuchando') {
+        if (inicioPresionMicRef.current === null) {
+          void detenerYTranscribirVoz();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', manejarAtajosGlobales);
+    window.addEventListener('keyup', manejarSoltarPushToTalk);
+    return () => {
+      window.removeEventListener('keydown', manejarAtajosGlobales);
+      window.removeEventListener('keyup', manejarSoltarPushToTalk);
+    };
+  }, [detenerYTranscribirVoz, iniciarGrabacionVoz, modalAjustesAbierto, seleccionarGrupos]);
 
   const accionRapidaGrupo = useCallback(
     async (idGrupo: string, porcentaje: number) => {
@@ -566,7 +789,11 @@ export default function App() {
       const nombre = g?.nombre ?? `Grupo ${idGrupo}`;
       const accion = porcentaje === 0 ? 'apagar' : porcentaje === 100 ? 'encender' : 'ajustar';
 
-      if (idGrupo !== '1 thru 6' && gruposSeleccionados.length === 1 && gruposSeleccionados[0] === idGrupo) {
+      if (
+        idGrupo !== `1 thru ${catalogoGruposActual.length}` &&
+        gruposSeleccionados.length === 1 &&
+        gruposSeleccionados[0] === idGrupo
+      ) {
         setValorSlider(porcentaje);
       }
 
@@ -576,7 +803,7 @@ export default function App() {
         { textoOriginal: `${nombre} al ${porcentaje}%` }
       );
     },
-    [despacharLoteComandos, grupos, gruposSeleccionados]
+    [catalogoGruposActual.length, despacharLoteComandos, grupos, gruposSeleccionados]
   );
 
   const aplicarIntensidadSeleccion = useCallback(
@@ -584,14 +811,14 @@ export default function App() {
       const comandos = construirComandosIntensidadSeleccion(
         gruposSeleccionados,
         porcentaje,
-        CATALOGO_GRUPOS.length
+        catalogoGruposActual.length
       );
       setValorSlider(porcentaje);
       await despacharLoteComandos(comandos, `${resumenSeleccion.titulo} al ${porcentaje}%`, {
         textoOriginal: `${resumenSeleccion.titulo} al ${porcentaje}%`,
       });
     },
-    [despacharLoteComandos, gruposSeleccionados, resumenSeleccion.titulo]
+    [catalogoGruposActual.length, despacharLoteComandos, gruposSeleccionados, resumenSeleccion.titulo]
   );
 
   const aplicarColorSeleccion = useCallback(
@@ -599,14 +826,14 @@ export default function App() {
       const comandos = construirComandosColorSeleccion(
         gruposSeleccionados,
         color.preset,
-        CATALOGO_GRUPOS.length
+        catalogoGruposActual.length
       );
       await despacharLoteComandos(comandos, `${resumenSeleccion.titulo} · ${color.nombre}`, {
         textoOriginal: `Poner ${resumenSeleccion.titulo.toLowerCase()} en ${color.nombre.toLowerCase()}`,
         colorOpcional: color,
       });
     },
-    [despacharLoteComandos, gruposSeleccionados, resumenSeleccion.titulo]
+    [catalogoGruposActual.length, despacharLoteComandos, gruposSeleccionados, resumenSeleccion.titulo]
   );
 
   const colorRapidoGrupo = useCallback(
@@ -623,6 +850,34 @@ export default function App() {
       );
     },
     [despacharLoteComandos, grupos]
+  );
+
+  const ejecutarAccionCue = useCallback(
+    async (accionCue: 'siguiente' | 'anterior' | 'ir_cue' | 'detener') => {
+      const execStr = String(configuracion.executorPorDefecto);
+      const valorCue = accionCue === 'ir_cue' ? cueNumeroInput.trim() : '';
+
+      const payload: ComandoLuces = {
+        accion: accionCue,
+        grupo: execStr,
+        executor: execStr,
+        valor: valorCue,
+        tipo: 'cue',
+      };
+
+      const etiquetas: Record<'siguiente' | 'anterior' | 'ir_cue' | 'detener', string> = {
+        siguiente: `Siguiente escena (Exec ${execStr})`,
+        anterior: `Escena anterior (Exec ${execStr})`,
+        ir_cue: `Ir a Cue ${valorCue} (Exec ${execStr})`,
+        detener: `Detener secuencia (Exec ${execStr})`,
+      };
+
+      await despacharLoteComandos([payload], etiquetas[accionCue], {
+        textoOriginal: etiquetas[accionCue],
+        registrarDeshacer: false,
+      });
+    },
+    [configuracion.executorPorDefecto, cueNumeroInput, despacharLoteComandos]
   );
 
   const ejecutarDeshacer = useCallback(async () => {
@@ -658,6 +913,35 @@ export default function App() {
       setPilaDeshacer(restoPila);
     }
   }, [despacharLoteComandos, gruposSeleccionados, pilaDeshacer]);
+
+  const guardarAjustesSistema = useCallback(
+    async (nuevaConfig: ConfiguracionSistemaMA2) => {
+      setGuardandoAjustes(true);
+      try {
+        if (window.api !== undefined) {
+          const respuesta = await window.api.guardarConfiguracion(nuevaConfig);
+          if (!respuesta.exito) {
+            lanzarToast('error', 'No se pudo guardar config.json', respuesta.mensaje);
+            return;
+          }
+          aplicarConfiguracionEnMemoria(respuesta.configuracion);
+          setModalAjustesAbierto(false);
+          lanzarToast('exito', 'Ajustes guardados', respuesta.mensaje);
+        } else {
+          aplicarConfiguracionEnMemoria(nuevaConfig);
+          setModalAjustesAbierto(false);
+          lanzarToast(
+            'info',
+            'Ajustes aplicados en vista web',
+            'En Electron se persisten en config.json y reconectan Telnet.'
+          );
+        }
+      } finally {
+        setGuardandoAjustes(false);
+      }
+    },
+    [aplicarConfiguracionEnMemoria, lanzarToast]
+  );
 
   const copiarTexto = useCallback(
     async (texto: string) => {
@@ -748,7 +1032,7 @@ export default function App() {
       lanzarToast(
         'advertencia',
         'Confirmar Blackout',
-        'Haz clic nuevamente para apagar todos los grupos (1 al 6).'
+        `Haz clic nuevamente para apagar todos los grupos (1 al ${catalogoGruposActual.length}).`
       );
       return;
     }
@@ -758,8 +1042,8 @@ export default function App() {
       timerBlackoutRef.current = null;
     }
     setConfirmandoBlackout(false);
-    void accionRapidaGrupo('1 thru 6', 0);
-  }, [accionRapidaGrupo, confirmandoBlackout, lanzarToast]);
+    void accionRapidaGrupo(`1 thru ${catalogoGruposActual.length}`, 0);
+  }, [accionRapidaGrupo, catalogoGruposActual.length, confirmandoBlackout, lanzarToast]);
 
   const grupoEnMenu = menu?.tipo === 'grupo' ? grupos[menu.idGrupo] : undefined;
   const logEnMenu =
@@ -772,7 +1056,7 @@ export default function App() {
   } as React.CSSProperties;
 
   return (
-    <div className="lienzo">
+    <div className="lienzo" data-tema={configuracion.interfaz.tema}>
       <div className="resplandor-carmesi" aria-hidden="true" />
 
       <div className="contenedor">
@@ -791,13 +1075,20 @@ export default function App() {
               <span
                 className={`badge ${infoEstado.clase}`}
                 role="status"
-                title="Estado en vivo de la sesión TCP/Telnet con GrandMA2"
+                title={`Conexión ${configuracion.conexion.host}:${configuracion.conexion.puerto}`}
               >
                 <span className="indicador-estado" />
                 {infoEstado.texto}
               </span>
             )}
 
+            <button
+              type="button"
+              className="btn-fantasma"
+              onClick={() => setModalAjustesAbierto(true)}
+            >
+              Ajustes
+            </button>
             <button
               type="button"
               className="btn-fantasma"
@@ -811,7 +1102,7 @@ export default function App() {
               className={`btn-carmesi-borde${confirmandoBlackout ? ' armado' : ''}`}
               onClick={manejarBlackout}
               disabled={enviando}
-              title="Doble clic rápido para ejecutar apagón general (grupos 1 al 6)"
+              title="Doble clic rápido para ejecutar apagón general"
             >
               {confirmandoBlackout ? '¿Confirmar Blackout?' : 'Blackout'}
             </button>
@@ -828,7 +1119,7 @@ export default function App() {
               ))
             : (
                 <>
-                  {CATALOGO_GRUPOS.map((g) => {
+                  {catalogoGruposActual.map((g) => {
                     const estado = grupos[g.id];
                     const intensidad = estado?.intensidad ?? 0;
                     const encendido = intensidad > 0;
@@ -887,7 +1178,7 @@ export default function App() {
                           </div>
                         </div>
 
-                        <span className="pastilla-nombre">{g.nombre}</span>
+                        <span className="pastilla-nombre">{estado?.nombre ?? g.nombre}</span>
 
                         <span className="pastilla-monitor-pista" aria-hidden="true">
                           <span
@@ -905,10 +1196,10 @@ export default function App() {
                   <button
                     type="button"
                     className={`pastilla-grupo pastilla-todos glass${todosSeleccionados ? ' seleccionada' : ''}`}
-                    onClick={() => seleccionarGrupos(CATALOGO_GRUPOS.map((g) => g.id))}
-                    title="Seleccionar todos los grupos G1–G6 (Alt + 0)"
+                    onClick={() => seleccionarGrupos(catalogoGruposActual.map((g) => g.id))}
+                    title={`Seleccionar todos los grupos G1–G${catalogoGruposActual.length} (Alt + 0)`}
                   >
-                    <span className="pastilla-id">G1–G6</span>
+                    <span className="pastilla-id">G1–G{catalogoGruposActual.length}</span>
                     <span className="pastilla-nombre">Todos</span>
                   </button>
                 </>
@@ -964,7 +1255,7 @@ export default function App() {
 
           <div className="control-colores-contenedor">
             <div className="control-colores" role="group" aria-label="Colores RF-05">
-              {CATALOGO_COLORES.map((color) => {
+              {catalogoColoresActual.map((color) => {
                 const colorActivo = colorActivoSeleccion.preset === color.preset;
                 return (
                   <button
@@ -986,31 +1277,138 @@ export default function App() {
           </div>
         </section>
 
+        {/* Bloque compacto de Escenas / Cues (RF-07) */}
+        <section className="barra-cues glass" aria-label="Control de escenas y cues">
+          <div className="cues-identidad">
+            <span className="cues-titulo">Escenas</span>
+            <span className="badge badge-sutil">Exec {configuracion.executorPorDefecto}</span>
+          </div>
+
+          <div className="cues-controles">
+            <button
+              type="button"
+              className="chip-nivel"
+              disabled={enviando}
+              onClick={() => void ejecutarAccionCue('anterior')}
+              title={`Retroceder escena (GoBack Executor ${configuracion.executorPorDefecto})`}
+            >
+              ◀ Anterior
+            </button>
+            <button
+              type="button"
+              className="chip-nivel activo"
+              disabled={enviando}
+              onClick={() => void ejecutarAccionCue('siguiente')}
+              title={`Siguiente escena (Go Executor ${configuracion.executorPorDefecto})`}
+            >
+              ▶ Siguiente
+            </button>
+
+            <div className="cue-salto-directo">
+              <label htmlFor="cue-numero" className="texto-gris">
+                Cue
+              </label>
+              <input
+                id="cue-numero"
+                type="text"
+                inputMode="decimal"
+                className="input-cue-compacto"
+                value={cueNumeroInput}
+                onChange={(e) => setCueNumeroInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void ejecutarAccionCue('ir_cue');
+                  }
+                }}
+                placeholder="3 o 2.5"
+              />
+              <button
+                type="button"
+                className="chip-nivel"
+                disabled={enviando || cueNumeroInput.trim().length === 0}
+                onClick={() => void ejecutarAccionCue('ir_cue')}
+              >
+                Ir
+              </button>
+            </div>
+
+            <button
+              type="button"
+              className="btn-carmesi-borde"
+              disabled={enviando}
+              onClick={() => void ejecutarAccionCue('detener')}
+              title={`Detener secuencia (Off Executor ${configuracion.executorPorDefecto})`}
+            >
+              ⏹ Off
+            </button>
+          </div>
+        </section>
+
         {/* Área principal de 2 columnas */}
         <main className="espacio-principal">
-          {/* Columna izquierda: Orden de Iluminación */}
+          {/* Columna izquierda: Orden de Iluminación + Voz offline */}
           <section className="panel glass">
             <div className="panel-titulo">
               <h2>Orden de Iluminación</h2>
               <span className="texto-gris" title="Atajos globales disponibles">
-                Alt+1..6 grupo · Alt+0 todos · Ctrl+K / / enfocar
+                Alt+1..6 grupo · Alt+0 todos · Ctrl+K o / enfocar
               </span>
             </div>
 
             <div className="campo-contenedor">
-              <textarea
-                ref={inputRef}
-                value={orden}
-                onChange={(e) => {
-                  setOrden(e.target.value);
-                  setIndiceHistorial(-1);
-                  setSugerenciasOcultas(false);
-                }}
-                onKeyDown={manejarTecladoOrden}
-                placeholder='Ej. "Frontales al 70% en azul" o "Frontales al 100% y contras apagadas"'
-                maxLength={220}
-                aria-label="Instrucción de iluminación"
-              />
+              <div className="area-texto-con-voz">
+                <textarea
+                  ref={inputRef}
+                  value={orden}
+                  onChange={(e) => {
+                    setOrden(e.target.value);
+                    setIndiceHistorial(-1);
+                    setSugerenciasOcultas(false);
+                  }}
+                  onKeyDown={manejarTecladoOrden}
+                  placeholder='Ej. "Frontales al 70% en azul", "Siguiente escena" o mantén Alt+Espacio para dictar'
+                  maxLength={220}
+                  aria-label="Instrucción de iluminación"
+                />
+
+                <div className="barra-voz">
+                  <button
+                    type="button"
+                    className={`boton-microfono ${estadoVoz}`}
+                    onPointerDown={manejarPointerDownMic}
+                    onPointerUp={manejarPointerUpMic}
+                    disabled={estadoVoz === 'transcribiendo'}
+                    title="Clic para iniciar/detener o mantén presionado (Push-to-Talk · Alt+Espacio)"
+                  >
+                    <span className="mic-icono" aria-hidden="true">
+                      ●
+                    </span>
+                    <span>
+                      {estadoVoz === 'escuchando'
+                        ? 'Escuchando...'
+                        : estadoVoz === 'transcribiendo'
+                          ? 'Transcribiendo...'
+                          : 'Voz (Alt+Espacio)'}
+                    </span>
+                  </button>
+
+                  {estadoVoz === 'escuchando' && (
+                    <div className="medidor-voz-pista" aria-label="Nivel de micrófono">
+                      <span
+                        className="medidor-voz-barra"
+                        style={{ width: `${nivelVoz}%` }}
+                      />
+                    </div>
+                  )}
+
+                  <span className="texto-gris badge-voz-modo">
+                    {configuracion.interfaz.autoEjecutarVoz
+                      ? 'Voz: Auto-envío'
+                      : 'Voz: Confirmar con Enter'}
+                  </span>
+                </div>
+              </div>
 
               {sugerenciasActivas.length > 0 ? (
                 <div className="chips-sugerencias">
@@ -1159,6 +1557,16 @@ export default function App() {
         </main>
       </div>
 
+      {/* Modal de Ajustes (no cierra con clic accidental fuera) */}
+      {modalAjustesAbierto && (
+        <ModalAjustes
+          configuracionActual={configuracion}
+          guardando={guardandoAjustes}
+          alCerrar={() => setModalAjustesAbierto(false)}
+          alGuardar={guardarAjustesSistema}
+        />
+      )}
+
       {/* Menú contextual */}
       {menu !== null && (
         <div
@@ -1204,7 +1612,7 @@ export default function App() {
                 Apagar (0%)
               </button>
               <div className="menu-divisor" />
-              {CATALOGO_COLORES.map((color) => (
+              {catalogoColoresActual.map((color) => (
                 <button
                   key={color.id}
                   type="button"

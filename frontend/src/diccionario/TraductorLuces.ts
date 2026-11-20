@@ -1,25 +1,19 @@
-import type { ComandoLuces, TipoAccionLuz } from '../tipos/ipc';
+import type {
+  ComandoLuces,
+  ConfiguracionColorMA2,
+  ConfiguracionGrupoMA2,
+  TipoAccionLuz,
+} from '../tipos/ipc';
 
 /**
  * Definición de un grupo o zona de iluminación en la consola GrandMA2.
  */
-export interface DefinicionGrupoMA2 {
-  readonly id: string;
-  readonly nombre: string;
-  readonly descripcion: string;
-  readonly sinonimos: readonly string[];
-}
+export type DefinicionGrupoMA2 = ConfiguracionGrupoMA2;
 
 /**
  * Definición de un preset cromático del Pool 4 (Color) en GrandMA2.
  */
-export interface DefinicionColorMA2 {
-  readonly id: string;
-  readonly nombre: string;
-  readonly preset: string;
-  readonly hex: string;
-  readonly sinonimos: readonly string[];
-}
+export type DefinicionColorMA2 = ConfiguracionColorMA2;
 
 /**
  * Resultado estructurado de interpretar una orden simple o compuesta en lenguaje natural.
@@ -188,6 +182,11 @@ const PALABRAS_AJUSTAR = [
   'dimmer',
 ] as const;
 
+const PALABRAS_CUE_ENTIDAD = ['escena', 'escenas', 'cue', 'cues', 'secuencia', 'executor', 'ejecutor'] as const;
+const PALABRAS_CUE_SIGUIENTE = ['siguiente', 'proxima', 'proximo', 'avanzar', 'avanza', 'adelante', 'go'] as const;
+const PALABRAS_CUE_ANTERIOR = ['anterior', 'previa', 'previo', 'volver', 'vuelve', 'retroceder', 'retrocede', 'atras', 'goback'] as const;
+const PALABRAS_CUE_DETENER = ['detener', 'deten', 'parar', 'para', 'apagar', 'apaga', 'off', 'stop'] as const;
+
 const CARACTERES_INYECCION = /[\r\n;\x00-\x1f]/;
 
 const PLANTILLAS_AUTOCOMPLETADO: readonly string[] = [
@@ -195,6 +194,10 @@ const PLANTILLAS_AUTOCOMPLETADO: readonly string[] = [
   'Frontales al 70% en azul',
   'Frontales al 100% y contras apagadas',
   'Frontales al 50%, contras en rojo',
+  'Siguiente escena',
+  'Escena anterior',
+  'Ir a escena 3',
+  'Detener escena',
   'Encender contras en blanco',
   'Contraluz en rojo',
   'Laterales al 75%',
@@ -222,9 +225,54 @@ interface ResolucionIntensidadInterna {
 }
 
 /**
- * Traductor de lenguaje natural en español a payloads tipados para GrandMA2 (RF-03, RF-04 y RF-05).
+ * Traductor de lenguaje natural en español a payloads tipados para GrandMA2 (RF-03, RF-04, RF-05 y RF-07).
  */
 export class TraductorLuces {
+  private static gruposActivos: readonly DefinicionGrupoMA2[] = CATALOGO_GRUPOS;
+  private static coloresActivos: readonly DefinicionColorMA2[] = CATALOGO_COLORES;
+  private static executorPorDefectoActivo = 1;
+
+  /**
+   * Actualiza en tiempo real el catálogo de grupos, colores y executor por defecto desde config.json.
+   */
+  public static configurarCatalogoDinamico(configuracion: {
+    readonly grupos?: readonly DefinicionGrupoMA2[];
+    readonly colores?: readonly DefinicionColorMA2[];
+    readonly executorPorDefecto?: number;
+  }): void {
+    if (configuracion.grupos !== undefined && configuracion.grupos.length > 0) {
+      TraductorLuces.gruposActivos = configuracion.grupos;
+    }
+    if (configuracion.colores !== undefined && configuracion.colores.length > 0) {
+      TraductorLuces.coloresActivos = configuracion.colores;
+    }
+    if (
+      configuracion.executorPorDefecto !== undefined &&
+      Number.isInteger(configuracion.executorPorDefecto) &&
+      configuracion.executorPorDefecto >= 1
+    ) {
+      TraductorLuces.executorPorDefectoActivo = configuracion.executorPorDefecto;
+    }
+  }
+
+  public static restablecerCatalogoPorDefecto(): void {
+    TraductorLuces.gruposActivos = CATALOGO_GRUPOS;
+    TraductorLuces.coloresActivos = CATALOGO_COLORES;
+    TraductorLuces.executorPorDefectoActivo = 1;
+  }
+
+  public static obtenerGruposActivos(): readonly DefinicionGrupoMA2[] {
+    return TraductorLuces.gruposActivos;
+  }
+
+  public static obtenerColoresActivos(): readonly DefinicionColorMA2[] {
+    return TraductorLuces.coloresActivos;
+  }
+
+  public static obtenerExecutorPorDefecto(): number {
+    return TraductorLuces.executorPorDefectoActivo;
+  }
+
   /**
    * Normaliza la entrada eliminando tildes/diacríticos, pasando a minúsculas
    * y limpiando signos de puntuación innecesarios.
@@ -262,7 +310,7 @@ export class TraductorLuces {
     }
 
     const dinamicas: string[] = [...coincidencias];
-    const grupoMencionado = CATALOGO_GRUPOS.find((g) =>
+    const grupoMencionado = TraductorLuces.gruposActivos.find((g) =>
       g.sinonimos.some((s) => tokens.some((t) => s.startsWith(t) || t === s))
     );
 
@@ -384,11 +432,6 @@ export class TraductorLuces {
     return TraductorLuces.dividirSegmentoPorConectorY(textoOriginal);
   }
 
-  /**
-   * Divide por " y " únicamente cuando ambos lados constituyen sub-órdenes completas
-   * con su propio grupo y su propia intención, preservando casos de ambigüedad como
-   * "frontales y laterales al 50%" o "grupo 1 y grupo 2 al 50%".
-   */
   private static dividirSegmentoPorConectorY(segmento: string): readonly string[] {
     const partes = segmento.split(/\s+y\s+/i).map((p) => p.trim());
     if (partes.length < 2) {
@@ -409,7 +452,11 @@ export class TraductorLuces {
     }
 
     const palabras = norm.split(' ');
-    const tieneGrupoCatalogo = CATALOGO_GRUPOS.some((g) =>
+    if (TraductorLuces.esOrdenDeCue(norm, palabras)) {
+      return true;
+    }
+
+    const tieneGrupoCatalogo = TraductorLuces.gruposActivos.some((g) =>
       g.sinonimos.some((s) => palabras.includes(s))
     );
     const tieneGrupoNumerico = /\bgrupos?\s+\d+/.test(norm);
@@ -428,7 +475,9 @@ export class TraductorLuces {
     const sinGrupo = norm
       .replace(/\bgrupos?\s+\d+(?:\s*(?:al|a|hasta|thru|-)\s*\d+)?/g, ' ')
       .trim();
-    const tieneColor = CATALOGO_COLORES.some((c) => c.sinonimos.some((s) => palabras.includes(s)));
+    const tieneColor = TraductorLuces.coloresActivos.some((c) =>
+      c.sinonimos.some((s) => palabras.includes(s))
+    );
     const tieneAccionOValor =
       /\d/.test(sinGrupo) ||
       palabras.includes('mitad') ||
@@ -438,6 +487,191 @@ export class TraductorLuces {
       PALABRAS_AJUSTAR.some((p) => palabras.includes(p));
 
     return tieneColor || tieneAccionOValor;
+  }
+
+  private static esOrdenDeCue(textoNormalizado: string, palabras: readonly string[]): boolean {
+    const tieneEntidadCue = PALABRAS_CUE_ENTIDAD.some((p) => palabras.includes(p));
+    if (!tieneEntidadCue) {
+      return /\b(?:goback)\b/.test(textoNormalizado);
+    }
+
+    // Evita confundir "escenario" (palabra de grupo general) con "escena"
+    const tieneCueExplicita = palabras.some((p) =>
+      ['escena', 'escenas', 'cue', 'cues', 'secuencia', 'executor', 'ejecutor'].includes(p)
+    );
+    return tieneCueExplicita;
+  }
+
+  private static interpretarCue(
+    textoOriginal: string,
+    textoNormalizado: string,
+    palabras: readonly string[]
+  ): ResultadoInterpretacion {
+    let executor = String(TraductorLuces.executorPorDefectoActivo);
+    let textoSinExecutor = textoNormalizado;
+
+    const matchExecutor = /\b(?:en\s+(?:el\s+)?)?(?:executor|ejecutor|exec)\s+(-?\d+)\b/.exec(
+      textoNormalizado
+    );
+    if (matchExecutor !== null) {
+      const execNum = Number(matchExecutor[1]);
+      if (!Number.isInteger(execNum) || execNum < 1 || execNum > 999) {
+        return TraductorLuces.crearResultadoError(
+          textoOriginal,
+          textoNormalizado,
+          'Executor inválido',
+          'Cue',
+          'El número de executor debe ser un entero entre 1 y 999.'
+        );
+      }
+      executor = String(execNum);
+      textoSinExecutor = textoNormalizado.replace(matchExecutor[0], ' ').trim();
+    }
+
+    // 1. Detección de "ir a escena X" / "cue 2.5" / "goto cue X"
+    if (/\d+\.\d+\.\d+|\d+\.\./.test(textoSinExecutor)) {
+      return TraductorLuces.crearResultadoError(
+        textoOriginal,
+        textoNormalizado,
+        `Executor ${executor}`,
+        'Cue',
+        'El número de cue tiene un formato decimal inválido.'
+      );
+    }
+
+    const matchIrCue = /\b(?:escena|escenas|cue|cues)\s+(-?\d+(?:\.\d+)?)\b/.exec(
+      textoSinExecutor
+    );
+    if (matchIrCue !== null) {
+      const cueStr = matchIrCue[1];
+      const cueNum = Number(cueStr);
+      if (!/^\d+(?:\.\d{1,3})?$/.test(cueStr) || !Number.isFinite(cueNum) || cueNum <= 0) {
+        return TraductorLuces.crearResultadoError(
+          textoOriginal,
+          textoNormalizado,
+          `Executor ${executor}`,
+          'Ir a Cue',
+          'El número de cue debe ser positivo con máximo 3 decimales (ej. "3" o "2.5").'
+        );
+      }
+
+      const payload: ComandoLuces = {
+        accion: 'ir_cue',
+        grupo: executor,
+        executor,
+        valor: cueStr,
+        tipo: 'cue',
+      };
+      const sintaxis = `Goto Cue ${cueStr} Executor ${executor}`;
+
+      return {
+        exito: true,
+        textoOriginal,
+        textoNormalizado,
+        comandoPayload: payload,
+        comandosPayload: [payload],
+        sintaxisMA2: sintaxis,
+        sintaxisListaMA2: [sintaxis],
+        resumenesComandos: [`Ir al Cue ${cueStr} (Exec ${executor})`],
+        etiquetaGrupo: `Executor ${executor}`,
+        etiquetaAccion: `Ir a Cue ${cueStr}`,
+        etiquetaValor: cueStr,
+      };
+    }
+
+    const esSiguiente = PALABRAS_CUE_SIGUIENTE.some((p) => palabras.includes(p));
+    const esAnterior = PALABRAS_CUE_ANTERIOR.some((p) => palabras.includes(p));
+    const esDetener = PALABRAS_CUE_DETENER.some((p) => palabras.includes(p));
+
+    if ((esSiguiente && esAnterior) || ((esSiguiente || esAnterior) && esDetener)) {
+      return TraductorLuces.crearResultadoError(
+        textoOriginal,
+        textoNormalizado,
+        `Executor ${executor}`,
+        'Contradictoria',
+        'Orden de escena contradictoria: especifica solo avanzar, retroceder o detener.'
+      );
+    }
+
+    if (esSiguiente) {
+      const payload: ComandoLuces = {
+        accion: 'siguiente',
+        grupo: executor,
+        executor,
+        valor: '',
+        tipo: 'cue',
+      };
+      const sintaxis = `Go Executor ${executor}`;
+      return {
+        exito: true,
+        textoOriginal,
+        textoNormalizado,
+        comandoPayload: payload,
+        comandosPayload: [payload],
+        sintaxisMA2: sintaxis,
+        sintaxisListaMA2: [sintaxis],
+        resumenesComandos: [`Siguiente escena (Exec ${executor})`],
+        etiquetaGrupo: `Executor ${executor}`,
+        etiquetaAccion: 'Siguiente Escena',
+        etiquetaValor: `Exec ${executor}`,
+      };
+    }
+
+    if (esAnterior) {
+      const payload: ComandoLuces = {
+        accion: 'anterior',
+        grupo: executor,
+        executor,
+        valor: '',
+        tipo: 'cue',
+      };
+      const sintaxis = `GoBack Executor ${executor}`;
+      return {
+        exito: true,
+        textoOriginal,
+        textoNormalizado,
+        comandoPayload: payload,
+        comandosPayload: [payload],
+        sintaxisMA2: sintaxis,
+        sintaxisListaMA2: [sintaxis],
+        resumenesComandos: [`Escena anterior (Exec ${executor})`],
+        etiquetaGrupo: `Executor ${executor}`,
+        etiquetaAccion: 'Escena Anterior',
+        etiquetaValor: `Exec ${executor}`,
+      };
+    }
+
+    if (esDetener) {
+      const payload: ComandoLuces = {
+        accion: 'detener',
+        grupo: executor,
+        executor,
+        valor: '',
+        tipo: 'cue',
+      };
+      const sintaxis = `Off Executor ${executor}`;
+      return {
+        exito: true,
+        textoOriginal,
+        textoNormalizado,
+        comandoPayload: payload,
+        comandosPayload: [payload],
+        sintaxisMA2: sintaxis,
+        sintaxisListaMA2: [sintaxis],
+        resumenesComandos: [`Detener secuencia (Exec ${executor})`],
+        etiquetaGrupo: `Executor ${executor}`,
+        etiquetaAccion: 'Detener Escena',
+        etiquetaValor: `Exec ${executor}`,
+      };
+    }
+
+    return TraductorLuces.crearResultadoError(
+      textoOriginal,
+      textoNormalizado,
+      `Executor ${executor}`,
+      'Cue',
+      'Indica la acción de escena: "siguiente escena", "escena anterior", "ir a escena 3" o "detener escena".'
+    );
   }
 
   private static interpretarClausulaSimple(clausulaOriginal: string): ResultadoInterpretacion {
@@ -456,6 +690,11 @@ export class TraductorLuces {
 
     const palabras = textoNormalizado.split(' ');
 
+    // 0. Prioridad: órdenes de Cues / Escenas (RF-07)
+    if (TraductorLuces.esOrdenDeCue(textoNormalizado, palabras)) {
+      return TraductorLuces.interpretarCue(textoOriginal, textoNormalizado, palabras);
+    }
+
     // 1. Detección de acciones contradictorias: encender y apagar a la vez
     const tieneApagar = PALABRAS_APAGAR.some((p) => palabras.includes(p));
     const tieneEncender = PALABRAS_ENCENDER.some((p) => palabras.includes(p));
@@ -471,7 +710,7 @@ export class TraductorLuces {
     }
 
     // 2. Detección de ambigüedad por múltiples colores
-    const coloresDetectados = CATALOGO_COLORES.filter((color) =>
+    const coloresDetectados = TraductorLuces.coloresActivos.filter((color) =>
       color.sinonimos.some((sinonimo) => palabras.includes(sinonimo))
     );
 
@@ -694,7 +933,7 @@ export class TraductorLuces {
     palabras: readonly string[],
     esBlackout: boolean
   ): ResolucionGrupoInterna {
-    const gruposCatalogoCoincidentes = CATALOGO_GRUPOS.filter((grupo) =>
+    const gruposCatalogoCoincidentes = TraductorLuces.gruposActivos.filter((grupo) =>
       grupo.sinonimos.some((sinonimo) => palabras.includes(sinonimo))
     );
 
@@ -766,10 +1005,10 @@ export class TraductorLuces {
           error: 'El rango de grupos no es válido: el grupo inicial debe ser menor o igual al final.',
         };
       }
-      if (fin > CATALOGO_GRUPOS.length) {
+      if (fin > TraductorLuces.gruposActivos.length) {
         return {
           exito: false,
-          error: `El rango de grupos excede el catálogo configurado (grupos 1 al ${CATALOGO_GRUPOS.length}).`,
+          error: `El rango de grupos excede el catálogo configurado (grupos 1 al ${TraductorLuces.gruposActivos.length}).`,
         };
       }
       const idRango = `${inicio} thru ${fin}`;
@@ -783,11 +1022,11 @@ export class TraductorLuces {
 
     if (coincidenciaRango === null && gruposNumericos.length === 1) {
       const idGrupo = gruposNumericos[0];
-      const grupoConocido = CATALOGO_GRUPOS.find((g) => g.id === idGrupo);
+      const grupoConocido = TraductorLuces.gruposActivos.find((g) => g.id === idGrupo);
       if (grupoConocido === undefined) {
         return {
           exito: false,
-          error: `El grupo ${idGrupo} no existe en el catálogo configurado (grupos válidos: 1 al ${CATALOGO_GRUPOS.length}).`,
+          error: `El grupo ${idGrupo} no existe en el catálogo configurado (grupos válidos: 1 al ${TraductorLuces.gruposActivos.length}).`,
         };
       }
       const matchTexto = `grupo ${idGrupo}`;
@@ -821,7 +1060,7 @@ export class TraductorLuces {
     if (esBlackout || tienePalabraGeneral) {
       return {
         exito: true,
-        id: '1 thru 6',
+        id: `1 thru ${TraductorLuces.gruposActivos.length}`,
         nombre: 'General (Todos)',
         textoSinGrupo: textoNormalizado,
       };

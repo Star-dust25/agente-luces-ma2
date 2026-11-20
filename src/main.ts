@@ -7,15 +7,26 @@ import {
 } from 'electron';
 import * as path from 'path';
 import {
+  ConfiguracionSistemaMA2,
   esComandoLucesValido,
   EstadoConexionMA2,
   RespuestaComandoIPC,
+  RespuestaGuardarConfigIPC,
+  ResultadoTranscripcionVoz,
 } from './interfaces/ComandoLuces';
 import { ClienteTelnetMA2, IClienteTelnetMA2 } from './red/ClienteTelnetMA2';
 import {
   ConstructorComandosMA2,
   IConstructorComandosMA2,
 } from './servicios/ConstructorComandosMA2';
+import {
+  GestorConfiguracion,
+  IGestorConfiguracion,
+} from './servicios/GestorConfiguracion';
+import {
+  IServicioVozLocal,
+  ServicioVozLocal,
+} from './servicios/ServicioVozLocal';
 
 /**
  * Canales IPC acordados entre el Proceso Principal (Backend) y el Proceso de Renderizado (Frontend).
@@ -26,24 +37,33 @@ export const CANALES_IPC = {
   RESPUESTA_COMANDO: 'ma2:respuesta-comando',
   OBTENER_ESTADO: 'ma2:obtener-estado',
   CAMBIO_ESTADO: 'ma2:estado-conexion',
+  OBTENER_CONFIG: 'ma2:obtener-config',
+  GUARDAR_CONFIG: 'ma2:guardar-config',
+  TRANSCRIBIR_AUDIO: 'ma2:transcribir-audio',
 } as const;
 
 /**
  * Orquestador del Proceso Principal de Electron.
- * Conecta los listeners de ipcMain con el constructor de comandos y el cliente Telnet.
+ * Conecta los listeners de ipcMain con configuración, voz local, constructor de comandos y Telnet.
  */
 class ControladorPrincipalMA2 {
   private readonly clienteTelnet: IClienteTelnetMA2;
   private readonly constructorComandos: IConstructorComandosMA2;
+  private readonly gestorConfig: IGestorConfiguracion;
+  private readonly servicioVoz: IServicioVozLocal;
   private ventanaPrincipal: BrowserWindow | null = null;
   private cancelarObservadorEstado: (() => void) | null = null;
 
   constructor(
     clienteTelnet: IClienteTelnetMA2,
-    constructorComandos: IConstructorComandosMA2
+    constructorComandos: IConstructorComandosMA2,
+    gestorConfig: IGestorConfiguracion,
+    servicioVoz: IServicioVozLocal
   ) {
     this.clienteTelnet = clienteTelnet;
     this.constructorComandos = constructorComandos;
+    this.gestorConfig = gestorConfig;
+    this.servicioVoz = servicioVoz;
   }
 
   /**
@@ -86,8 +106,8 @@ class ControladorPrincipalMA2 {
 
   private crearVentanaPrincipal(): void {
     this.ventanaPrincipal = new BrowserWindow({
-      width: 1200,
-      height: 800,
+      width: 1240,
+      height: 820,
       show: true,
       title: 'Agente de Control de Luces - GrandMA2',
       webPreferences: {
@@ -132,11 +152,47 @@ class ControladorPrincipalMA2 {
     ipcMain.handle(CANALES_IPC.OBTENER_ESTADO, (): EstadoConexionMA2 => {
       return this.clienteTelnet.obtenerEstado();
     });
+
+    ipcMain.handle(CANALES_IPC.OBTENER_CONFIG, (): ConfiguracionSistemaMA2 => {
+      return this.gestorConfig.obtenerConfiguracion();
+    });
+
+    ipcMain.handle(
+      CANALES_IPC.GUARDAR_CONFIG,
+      (_evento: IpcMainInvokeEvent, nuevaConfig: unknown): RespuestaGuardarConfigIPC => {
+        try {
+          const configGuardada = this.gestorConfig.guardarConfiguracion(nuevaConfig);
+          this.clienteTelnet.actualizarConfiguracionConexion(configGuardada.conexion);
+          return {
+            exito: true,
+            configuracion: configGuardada,
+            mensaje: 'Configuración guardada y aplicada correctamente.',
+          };
+        } catch (error: unknown) {
+          const detalle = error instanceof Error ? error.message : String(error);
+          return {
+            exito: false,
+            configuracion: this.gestorConfig.obtenerConfiguracion(),
+            mensaje: detalle,
+          };
+        }
+      }
+    );
+
+    ipcMain.handle(
+      CANALES_IPC.TRANSCRIBIR_AUDIO,
+      async (_evento: IpcMainInvokeEvent, datosAudio: unknown): Promise<ResultadoTranscripcionVoz> => {
+        return this.servicioVoz.transcribirAudioPCM(datosAudio);
+      }
+    );
   }
 
   private eliminarListenersIPC(): void {
     ipcMain.removeHandler(CANALES_IPC.INVOCAR_COMANDO);
     ipcMain.removeHandler(CANALES_IPC.OBTENER_ESTADO);
+    ipcMain.removeHandler(CANALES_IPC.OBTENER_CONFIG);
+    ipcMain.removeHandler(CANALES_IPC.GUARDAR_CONFIG);
+    ipcMain.removeHandler(CANALES_IPC.TRANSCRIBIR_AUDIO);
     ipcMain.removeAllListeners(CANALES_IPC.EVENTO_COMANDO_LUCES);
   }
 
@@ -147,7 +203,7 @@ class ControladorPrincipalMA2 {
   private async procesarCargaUtilIPC(cargaUtil: unknown): Promise<RespuestaComandoIPC> {
     if (!esComandoLucesValido(cargaUtil)) {
       const mensajeError =
-        'Carga útil IPC inválida. Se requiere: { accion: "encender" | "apagar" | "ajustar" | "color", grupo: string, valor: string, tipo: "intensidad" | "color" }.';
+        'Carga útil IPC inválida. Se requiere un comando válido de intensidad, color o cue.';
       console.warn(`[Main] ${mensajeError}`, cargaUtil);
       return this.crearRespuesta(false, null, mensajeError);
     }
@@ -210,23 +266,31 @@ function registrarManejadoresGlobalesDeErrores(): void {
 function arrancarAplicacion(): void {
   registrarManejadoresGlobalesDeErrores();
 
-  const constructorComandos = new ConstructorComandosMA2();
-  const clienteTelnet = new ClienteTelnetMA2(constructorComandos, {
-    host: '127.0.0.1',
-    puerto: 30000,
-  });
-  const controladorPrincipal = new ControladorPrincipalMA2(
-    clienteTelnet,
-    constructorComandos
-  );
+  let controladorPrincipal: ControladorPrincipalMA2 | null = null;
 
   void app
     .whenReady()
     .then(() => {
+      const rutaConfigUsuario = path.join(app.getPath('userData'), 'config.json');
+      const rutaPlantillaProyecto = path.join(__dirname, '..', 'config.json');
+      const gestorConfig = new GestorConfiguracion(rutaConfigUsuario, rutaPlantillaProyecto);
+      const configInicial = gestorConfig.obtenerConfiguracion();
+
+      const constructorComandos = new ConstructorComandosMA2();
+      const clienteTelnet = new ClienteTelnetMA2(constructorComandos, configInicial.conexion);
+      const rutaCacheVoz = path.join(__dirname, '..', '.cache-modelos-voz');
+      const servicioVoz = new ServicioVozLocal(rutaCacheVoz);
+
+      controladorPrincipal = new ControladorPrincipalMA2(
+        clienteTelnet,
+        constructorComandos,
+        gestorConfig,
+        servicioVoz
+      );
       controladorPrincipal.iniciar();
 
       app.on('activate', () => {
-        controladorPrincipal.asegurarVentanaPrincipal();
+        controladorPrincipal?.asegurarVentanaPrincipal();
       });
     })
     .catch((error: unknown) => {
@@ -240,7 +304,7 @@ function arrancarAplicacion(): void {
   });
 
   app.on('before-quit', () => {
-    controladorPrincipal.detener();
+    controladorPrincipal?.detener();
   });
 }
 

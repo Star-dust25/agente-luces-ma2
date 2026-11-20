@@ -130,4 +130,111 @@ assert.equal(
 );
 assert.equal(esComandoLucesValido(null), false);
 
+// 6. Control de Cues / Escenas (RF-07) y validación estricta de executor/cue
+assert.equal(
+  constructor.construirComando({
+    accion: 'siguiente',
+    grupo: '1',
+    executor: '1',
+    valor: '',
+    tipo: 'cue',
+  }),
+  'Go Executor 1\r\n'
+);
+assert.equal(
+  constructor.construirComando({
+    accion: 'anterior',
+    grupo: '2',
+    executor: '2',
+    valor: '',
+    tipo: 'cue',
+  }),
+  'GoBack Executor 2\r\n'
+);
+assert.equal(
+  constructor.construirComando({
+    accion: 'ir_cue',
+    grupo: '3',
+    executor: '3',
+    valor: '2.5',
+    tipo: 'cue',
+  }),
+  'Goto Cue 2.5 Executor 3\r\n'
+);
+assert.equal(
+  constructor.construirComando({
+    accion: 'detener',
+    grupo: '4',
+    executor: '4',
+    valor: '',
+    tipo: 'cue',
+  }),
+  'Off Executor 4\r\n'
+);
+
+assert.throws(
+  () =>
+    constructor.construirComando({
+      accion: 'ir_cue',
+      grupo: '1',
+      executor: '1',
+      valor: '0',
+      tipo: 'cue',
+    }),
+  /número de cue/i
+);
+assert.throws(
+  () =>
+    constructor.construirComando({
+      accion: 'siguiente',
+      grupo: '1; Off 2',
+      executor: '1; Off 2',
+      valor: '',
+      tipo: 'cue',
+    }),
+  /no es válido/i
+);
+assert.throws(
+  () =>
+    constructor.construirComando({
+      accion: 'siguiente',
+      grupo: '1\r\nOff 2',
+      executor: '1\r\nOff 2',
+      valor: '',
+      tipo: 'cue',
+    }),
+  /caracteres de control/i
+);
+
+assert.equal(
+  esComandoLucesValido({
+    accion: 'ir_cue',
+    grupo: '1',
+    executor: '1',
+    valor: '3.25',
+    tipo: 'cue',
+  }),
+  true
+);
+assert.equal(
+  esComandoLucesValido({
+    accion: 'ir_cue',
+    grupo: '1',
+    executor: '1',
+    valor: '0',
+    tipo: 'cue',
+  }),
+  false
+);
+assert.equal(
+  esComandoLucesValido({
+    accion: 'siguiente',
+    grupo: '1000',
+    executor: '1000',
+    valor: '',
+    tipo: 'cue',
+  }),
+  false
+);
+
 console.log('Todos los casos del backend (ConstructorComandosMA2 y Type Guards) pasaron exitosamente.');

@@ -12,6 +12,7 @@ export interface IClienteTelnetMA2 {
   conectar(): void;
   desconectar(): void;
   enviarComando(comandoRaw: string): Promise<boolean>;
+  actualizarConfiguracionConexion(nuevaConfig: Partial<ConfiguracionTelnetMA2>): void;
   obtenerEstado(): EstadoConexionMA2;
   estaListoParaEnviar(): boolean;
   registrarObservadorEstado(observador: ObservadorEstadoConexion): () => void;
@@ -43,7 +44,7 @@ const CONFIGURACION_POR_DEFECTO: ConfiguracionTelnetMA2 = {
 export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
   private static readonly TIEMPO_ESPERA_AUTENTICACION_MS = 6000;
 
-  private readonly configuracion: ConfiguracionTelnetMA2;
+  private configuracion: ConfiguracionTelnetMA2;
   private readonly constructorComandos: IConstructorComandosMA2;
   private readonly observadoresEstado: Set<ObservadorEstadoConexion> = new Set();
   private readonly colaPendientes: ComandoPendiente[] = [];
@@ -120,6 +121,39 @@ export class ClienteTelnetMA2 implements IClienteTelnetMA2 {
     this.loginEnviado = false;
     this.actualizarEstado('DESCONECTADO');
     console.info('[ClienteTelnetMA2] Conexión Telnet cerrada de forma controlada.');
+  }
+
+  /**
+   * Actualiza los parámetros de red/credenciales en caliente y reconecta sin reiniciar Electron.
+   */
+  public actualizarConfiguracionConexion(nuevaConfig: Partial<ConfiguracionTelnetMA2>): void {
+    const cambioCritico =
+      (nuevaConfig.host !== undefined && nuevaConfig.host !== this.configuracion.host) ||
+      (nuevaConfig.puerto !== undefined && nuevaConfig.puerto !== this.configuracion.puerto) ||
+      (nuevaConfig.usuario !== undefined && nuevaConfig.usuario !== this.configuracion.usuario) ||
+      (nuevaConfig.contrasena !== undefined &&
+        nuevaConfig.contrasena !== this.configuracion.contrasena);
+
+    this.configuracion = {
+      ...this.configuracion,
+      ...nuevaConfig,
+    };
+
+    if (!cambioCritico && this.estaListoParaEnviar()) {
+      return;
+    }
+
+    console.info(
+      `[ClienteTelnetMA2] Aplicando nueva configuración (${this.configuracion.host}:${this.configuracion.puerto}) y reconectando...`
+    );
+
+    this.cancelarTemporizadorReconexion();
+    this.cancelarTemporizadorAutenticacion();
+    this.limpiarSocketActual();
+    this.intentosReconexion = 0;
+    this.loginEnviado = false;
+    this.actualizarEstado('DESCONECTADO');
+    this.conectar();
   }
 
   /**

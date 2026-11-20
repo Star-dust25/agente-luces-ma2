@@ -19,6 +19,8 @@ const {
   validarRangoGrupos,
   validarValorIntensidad,
   validarPresetColor,
+  validarExecutor,
+  validarNumeroCue,
 } = require('../src/seguridadComandos.ts');
 
 function bloqueoDeOrden(orden) {
@@ -212,6 +214,45 @@ assert.match(
     'frontales al 50%; shutdown'
   ),
   /seguridad/
+);
+
+// ---------------------------------------------------------
+// 13. Validación estricta para Cues / Escenas (RF-07)
+// ---------------------------------------------------------
+assert.equal(validarExecutor('1'), null);
+assert.equal(validarExecutor('999'), null);
+assert.match(validarExecutor('0'), /entre 1 y 999/);
+assert.match(validarExecutor('1000'), /entre 1 y 999/);
+
+assert.equal(validarNumeroCue('3'), null);
+assert.equal(validarNumeroCue('2.5'), null);
+assert.match(validarNumeroCue('0'), /mayor a 0/);
+assert.match(validarNumeroCue('abc'), /no es válido/);
+
+assert.equal(bloqueoDeOrden('siguiente escena'), null);
+assert.equal(bloqueoDeOrden('escena anterior en executor 4'), null);
+assert.equal(bloqueoDeOrden('ir a escena 5.2'), null);
+assert.equal(bloqueoDeOrden('detener escena'), null);
+
+assert.match(
+  bloqueoDeSeguridad({
+    accion: 'ir_cue',
+    grupo: '1',
+    executor: '1',
+    valor: '2.5; Off 1',
+    tipo: 'cue',
+  }),
+  /seguridad/
+);
+assert.match(
+  bloqueoDeSeguridad({
+    accion: 'siguiente',
+    grupo: '1',
+    executor: '1200',
+    valor: '',
+    tipo: 'cue',
+  }),
+  /entre 1 y 999/
 );
 
 console.log('Todos los casos de seguridad del frontend: correctos');

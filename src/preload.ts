@@ -2,8 +2,11 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 import type {
   ComandoLuces,
+  ConfiguracionSistemaMA2,
   EstadoConexionMA2,
   RespuestaComandoIPC,
+  RespuestaGuardarConfigIPC,
+  ResultadoTranscripcionVoz,
 } from './interfaces/ComandoLuces';
 
 /**
@@ -15,6 +18,13 @@ export interface ApiPuenteMA2 {
   readonly suscribirEstadoConexion: (
     observador: (estado: EstadoConexionMA2) => void
   ) => () => void;
+  readonly obtenerConfiguracion: () => Promise<ConfiguracionSistemaMA2>;
+  readonly guardarConfiguracion: (
+    config: ConfiguracionSistemaMA2
+  ) => Promise<RespuestaGuardarConfigIPC>;
+  readonly transcribirAudio: (
+    muestrasPCM16k: Float32Array
+  ) => Promise<ResultadoTranscripcionVoz>;
 }
 
 declare global {
@@ -40,6 +50,17 @@ const puenteApi: ApiPuenteMA2 = {
     return () => {
       ipcRenderer.removeListener('ma2:estado-conexion', manejador);
     };
+  },
+  obtenerConfiguracion: (): Promise<ConfiguracionSistemaMA2> => {
+    return ipcRenderer.invoke('ma2:obtener-config');
+  },
+  guardarConfiguracion: (
+    config: ConfiguracionSistemaMA2
+  ): Promise<RespuestaGuardarConfigIPC> => {
+    return ipcRenderer.invoke('ma2:guardar-config', config);
+  },
+  transcribirAudio: (muestrasPCM16k: Float32Array): Promise<ResultadoTranscripcionVoz> => {
+    return ipcRenderer.invoke('ma2:transcribir-audio', muestrasPCM16k);
   },
 };
 

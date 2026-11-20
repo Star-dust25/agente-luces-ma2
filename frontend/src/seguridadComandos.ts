@@ -8,11 +8,23 @@ export const ACCIONES_PERMITIDAS: ReadonlySet<TipoAccionLuz> = new Set<TipoAccio
   'apagar',
   'ajustar',
   'color',
+  'siguiente',
+  'anterior',
+  'ir_cue',
+  'detener',
+]);
+
+export const ACCIONES_CUE: ReadonlySet<TipoAccionLuz> = new Set<TipoAccionLuz>([
+  'siguiente',
+  'anterior',
+  'ir_cue',
+  'detener',
 ]);
 
 export const TIPOS_PARAMETRO_PERMITIDOS: ReadonlySet<TipoParametroLuz> = new Set<TipoParametroLuz>([
   'intensidad',
   'color',
+  'cue',
 ]);
 
 const CARACTERES_CONTROL_O_INYECCION = /[\r\n;\x00-\x1f]/;
@@ -21,11 +33,17 @@ const REGEX_RANGO_GRUPO = /^(\d+)\s+thru\s+(\d+)$/i;
 const REGEX_GRUPO_INDIVIDUAL = /^0*([1-9]\d*)$/;
 const REGEX_VALOR_NUMERICO = /^\d+(?:\.\d+)?$/;
 const REGEX_PRESET_COLOR = /^(?:4\.)?[1-9]\d?$/;
+const REGEX_EXECUTOR_VALIDO = /^[1-9]\d{0,2}$/;
+const REGEX_NUMERO_CUE_VALIDO = /^\d+(?:\.\d{1,3})?$/;
 
 /**
  * Valida que un rango numérico de grupos sea consistente y esté dentro del catálogo configurado.
  */
-export function validarRangoGrupos(inicioNum: number, finNum: number): string | null {
+export function validarRangoGrupos(
+  inicioNum: number,
+  finNum: number,
+  maxGrupos: number = MAX_GRUPOS_EN_RANGO
+): string | null {
   if (
     !Number.isSafeInteger(inicioNum) ||
     !Number.isSafeInteger(finNum) ||
@@ -34,11 +52,11 @@ export function validarRangoGrupos(inicioNum: number, finNum: number): string | 
   ) {
     return 'El rango de grupos no es válido.';
   }
-  if (finNum - inicioNum + 1 > MAX_GRUPOS_EN_RANGO) {
-    return `Los rangos de más de ${MAX_GRUPOS_EN_RANGO} grupos están bloqueados por seguridad.`;
+  if (finNum - inicioNum + 1 > maxGrupos) {
+    return `Los rangos de más de ${maxGrupos} grupos están bloqueados por seguridad.`;
   }
-  if (inicioNum > MAX_GRUPOS_EN_RANGO || finNum > MAX_GRUPOS_EN_RANGO) {
-    return `El rango de grupos excede el catálogo configurado (grupos 1 al ${MAX_GRUPOS_EN_RANGO}).`;
+  if (inicioNum > maxGrupos || finNum > maxGrupos) {
+    return `El rango de grupos excede el catálogo configurado (grupos 1 al ${maxGrupos}).`;
   }
   return null;
 }
@@ -70,6 +88,32 @@ export function validarPresetColor(preset: string): string | null {
 }
 
 /**
+ * Valida que el número de executor sea un entero positivo entre 1 y 999 (RF-07).
+ */
+export function validarExecutor(executor: string): string | null {
+  const limpio = executor.trim();
+  if (!REGEX_EXECUTOR_VALIDO.test(limpio)) {
+    return 'El executor debe ser un número entero entre 1 y 999.';
+  }
+  return null;
+}
+
+/**
+ * Valida que el número de Cue cumpla con el formato positivo de GrandMA2 (ej. "3" o "2.5").
+ */
+export function validarNumeroCue(numeroCue: string): string | null {
+  const limpio = numeroCue.trim();
+  if (!REGEX_NUMERO_CUE_VALIDO.test(limpio)) {
+    return 'El número de Cue no es válido (usa un entero o hasta 3 decimales, ej. "3" o "2.5").';
+  }
+  const numero = Number(limpio);
+  if (!Number.isFinite(numero) || numero <= 0) {
+    return 'El número de Cue debe ser mayor a 0.';
+  }
+  return null;
+}
+
+/**
  * Evalúa las restricciones de seguridad tanto para la vista previa en vivo como para
  * todas las vías de envío hacia la consola GrandMA2.
  *
@@ -87,7 +131,8 @@ export function bloqueoDeSeguridad(
   if (
     (ordenOriginal !== null && CARACTERES_CONTROL_O_INYECCION.test(ordenOriginal)) ||
     CARACTERES_CONTROL_O_INYECCION.test(comando.grupo ?? '') ||
-    CARACTERES_CONTROL_O_INYECCION.test(comando.valor ?? '')
+    CARACTERES_CONTROL_O_INYECCION.test(comando.valor ?? '') ||
+    CARACTERES_CONTROL_O_INYECCION.test(comando.executor ?? '')
   ) {
     return 'Caracteres no permitidos detectados por seguridad.';
   }
@@ -99,12 +144,41 @@ export function bloqueoDeSeguridad(
   if (!ACCIONES_PERMITIDAS.has(comando.accion)) {
     return 'La acción solicitada no es válida.';
   }
+
+  // Reglas estrictas para Cues / Escenas (RF-07)
+  if (comando.tipo === 'cue') {
+    if (!ACCIONES_CUE.has(comando.accion)) {
+      return 'La acción no es compatible con el tipo cue.';
+    }
+    const executorSolicitado = comando.executor ?? comando.grupo;
+    const errorExec = validarExecutor(executorSolicitado);
+    if (errorExec !== null) {
+      return errorExec;
+    }
+    if (comando.accion === 'ir_cue') {
+      const errorCue = validarNumeroCue(comando.valor ?? '');
+      if (errorCue !== null) {
+        return errorCue;
+      }
+    }
+    return null;
+  }
+
+  if (ACCIONES_CUE.has(comando.accion)) {
+    return 'Las acciones de escena solo son compatibles con el parámetro cue.';
+  }
+
   if (comando.tipo === 'color' && comando.accion !== 'color') {
     return 'La acción no es compatible con el tipo de parámetro color.';
   }
   if (comando.tipo === 'intensidad' && comando.accion === 'color') {
     return 'La acción color no es compatible con el parámetro de intensidad.';
   }
+
+  const maxGruposCatalogo = Math.max(
+    MAX_GRUPOS_EN_RANGO,
+    TraductorLuces.obtenerGruposActivos().length
+  );
 
   // Normalización del texto para validar rangos solicitados en la orden
   const orden = TraductorLuces.normalizarTexto(ordenOriginal ?? '');
@@ -114,7 +188,8 @@ export function bloqueoDeSeguridad(
   if (rangoSolicitado !== null) {
     const errorRangoTexto = validarRangoGrupos(
       Number(rangoSolicitado[1]),
-      Number(rangoSolicitado[2])
+      Number(rangoSolicitado[2]),
+      maxGruposCatalogo
     );
     if (errorRangoTexto !== null) return errorRangoTexto;
   }
@@ -125,7 +200,7 @@ export function bloqueoDeSeguridad(
   if (coincidenciaRango !== null) {
     const inicio = Number(coincidenciaRango[1]);
     const fin = Number(coincidenciaRango[2]);
-    const errorRango = validarRangoGrupos(inicio, fin);
+    const errorRango = validarRangoGrupos(inicio, fin, maxGruposCatalogo);
     if (errorRango !== null) return errorRango;
   } else {
     const coincidenciaIndividual = REGEX_GRUPO_INDIVIDUAL.exec(grupo);
@@ -136,8 +211,8 @@ export function bloqueoDeSeguridad(
     if (!Number.isSafeInteger(numeroGrupo) || numeroGrupo < 1) {
       return 'El grupo indicado no es válido para la consola.';
     }
-    if (numeroGrupo > MAX_GRUPOS_EN_RANGO) {
-      return `El grupo indicado no pertenece al catálogo configurado (grupos 1 al ${MAX_GRUPOS_EN_RANGO}).`;
+    if (numeroGrupo > maxGruposCatalogo) {
+      return `El grupo indicado no pertenece al catálogo configurado (grupos 1 al ${maxGruposCatalogo}).`;
     }
   }
 

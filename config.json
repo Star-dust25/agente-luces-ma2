@@ -1,0 +1,116 @@
+{
+  "conexion": {
+    "host": "127.0.0.1",
+    "puerto": 30000,
+    "usuario": "administrator",
+    "contrasena": "admin"
+  },
+  "executorPorDefecto": 1,
+  "grupos": [
+    {
+      "id": "1",
+      "nombre": "Frontales",
+      "descripcion": "Luz clave y rostro de escenario",
+      "sinonimos": ["frontales", "frontal", "frente", "rostro", "cara"]
+    },
+    {
+      "id": "2",
+      "nombre": "Contraluz",
+      "descripcion": "Recorte trasero y silueta",
+      "sinonimos": ["contraluz", "contraluces", "contra", "contras", "trasera", "traseras", "back"]
+    },
+    {
+      "id": "3",
+      "nombre": "Laterales",
+      "descripcion": "Calles y barras laterales",
+      "sinonimos": ["laterales", "lateral", "calles", "calle", "side", "costados"]
+    },
+    {
+      "id": "4",
+      "nombre": "Wash Escenario",
+      "descripcion": "Baño general y ambiente de piso",
+      "sinonimos": ["wash", "ambiente", "piso", "bano", "fondo", "ciclorama"]
+    },
+    {
+      "id": "5",
+      "nombre": "Cabezas Móviles",
+      "descripcion": "Beams, spots y efectos aéreos",
+      "sinonimos": ["moviles", "movil", "cabezas", "cabeza", "beams", "beam", "spots", "spot"]
+    },
+    {
+      "id": "6",
+      "nombre": "Público / Blinders",
+      "descripcion": "Cegadoras e iluminación de audiencia",
+      "sinonimos": ["publico", "audiencia", "blinders", "blinder", "cegadoras", "cegadora"]
+    }
+  ],
+  "colores": [
+    {
+      "id": "blanco",
+      "nombre": "Blanco Frío",
+      "preset": "4.1",
+      "hex": "#f8fafc",
+      "sinonimos": ["blanco", "blanca", "blancos", "blancas", "frio", "white", "neutro"]
+    },
+    {
+      "id": "rojo",
+      "nombre": "Rojo Carmesí",
+      "preset": "4.2",
+      "hex": "#ef4444",
+      "sinonimos": ["rojo", "roja", "rojos", "rojas", "red", "carmesi"]
+    },
+    {
+      "id": "ambar",
+      "nombre": "Ámbar Cálido",
+      "preset": "4.3",
+      "hex": "#f59e0b",
+      "sinonimos": ["ambar", "calido", "calida", "naranja", "oro", "dorado"]
+    },
+    {
+      "id": "amarillo",
+      "nombre": "Amarillo Sol",
+      "preset": "4.4",
+      "hex": "#eab308",
+      "sinonimos": ["amarillo", "amarilla", "sol"]
+    },
+    {
+      "id": "verde",
+      "nombre": "Verde Esmeralda",
+      "preset": "4.5",
+      "hex": "#10b981",
+      "sinonimos": ["verde", "verdes", "esmeralda", "green"]
+    },
+    {
+      "id": "cian",
+      "nombre": "Cian Turquesa",
+      "preset": "4.6",
+      "hex": "#06b6d4",
+      "sinonimos": ["cian", "celeste", "turquesa", "agua", "cyan"]
+    },
+    {
+      "id": "azul",
+      "nombre": "Azul Cobalto",
+      "preset": "4.7",
+      "hex": "#3b82f6",
+      "sinonimos": ["azul", "azules", "blue", "marino", "cobalto"]
+    },
+    {
+      "id": "magenta",
+      "nombre": "Magenta Neón",
+      "preset": "4.8",
+      "hex": "#ec4899",
+      "sinonimos": ["magenta", "rosa", "fucsia", "neon", "pink"]
+    },
+    {
+      "id": "violeta",
+      "nombre": "Violeta Escénico",
+      "preset": "4.9",
+      "hex": "#a855f7",
+      "sinonimos": ["violeta", "morado", "morada", "purpura", "lila"]
+    }
+  ],
+  "interfaz": {
+    "tema": "cabina",
+    "autoEjecutarVoz": false
+  }
+}

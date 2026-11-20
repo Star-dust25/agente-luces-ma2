@@ -10,7 +10,7 @@ export interface IConstructorComandosMA2 {
 
 /**
  * Servicio responsable de traducir objetos tipados del frontend a sintaxis exacta
- * de línea de comandos para GrandMA2 vía Telnet (RF-04).
+ * de línea de comandos para GrandMA2 vía Telnet (RF-04, RF-05 y RF-07).
  */
 export class ConstructorComandosMA2 implements IConstructorComandosMA2 {
   private static readonly TERMINADOR_LINEA_MA2 = '\r\n';
@@ -18,11 +18,13 @@ export class ConstructorComandosMA2 implements IConstructorComandosMA2 {
   private static readonly INTENSIDAD_MAXIMA = 100;
   private static readonly EXPRESION_GRUPO_VALIDO = /^\d+(?:\s*(?:thru|\+|-)\s*\d+)*$/i;
   private static readonly EXPRESION_PRESET_COLOR_VALIDO = /^(?:4\.)?[1-9]\d?$/;
+  private static readonly EXPRESION_EXECUTOR_VALIDO = /^[1-9]\d{0,2}$/;
+  private static readonly EXPRESION_CUE_VALIDO = /^\d+(?:\.\d{1,3})?$/;
   private static readonly EXPRESION_CARACTERES_CONTROL = /[\r\n\0]/;
 
   /**
    * Construye la instrucción Telnet exacta que requiere la consola GrandMA2.
-   * Ejemplos de salida: "Group 1 At 50\r\n" o "Group 1 At Preset 4.2\r\n"
+   * Ejemplos: "Group 1 At 50\r\n", "Group 1 At Preset 4.2\r\n", "Go Executor 1\r\n"
    */
   public construirComando(comando: ComandoLuces): string {
     switch (comando.tipo) {
@@ -30,6 +32,8 @@ export class ConstructorComandosMA2 implements IConstructorComandosMA2 {
         return this.construirComandoIntensidad(comando);
       case 'color':
         return this.construirComandoColor(comando);
+      case 'cue':
+        return this.construirComandoCue(comando);
       default: {
         const tipoNoSoportado: never = comando.tipo;
         throw new Error(`Tipo de parámetro no soportado para GrandMA2: ${String(tipoNoSoportado)}`);
@@ -69,6 +73,28 @@ export class ConstructorComandosMA2 implements IConstructorComandosMA2 {
   }
 
   /**
+   * Traduce un comando de escena/cue a sintaxis Telnet de GrandMA2 (RF-07).
+   */
+  private construirComandoCue(comando: ComandoLuces): string {
+    const executor = this.sanitizarExecutor(comando.executor ?? comando.grupo);
+
+    switch (comando.accion) {
+      case 'siguiente':
+        return `Go Executor ${executor}${ConstructorComandosMA2.TERMINADOR_LINEA_MA2}`;
+      case 'anterior':
+        return `GoBack Executor ${executor}${ConstructorComandosMA2.TERMINADOR_LINEA_MA2}`;
+      case 'detener':
+        return `Off Executor ${executor}${ConstructorComandosMA2.TERMINADOR_LINEA_MA2}`;
+      case 'ir_cue': {
+        const numeroCue = this.sanitizarNumeroCue(comando.valor);
+        return `Goto Cue ${numeroCue} Executor ${executor}${ConstructorComandosMA2.TERMINADOR_LINEA_MA2}`;
+      }
+      default:
+        throw new Error(`Acción de cue no válida para GrandMA2: "${comando.accion}".`);
+    }
+  }
+
+  /**
    * Normaliza el identificador del preset de color hacia el pool 4 de GrandMA2.
    */
   private normalizarPresetColor(valorPreset: string): string {
@@ -80,6 +106,34 @@ export class ConstructorComandosMA2 implements IConstructorComandosMA2 {
     }
 
     return presetLimpio.includes('.') ? presetLimpio : `4.${presetLimpio}`;
+  }
+
+  private sanitizarExecutor(executorTexto: string): string {
+    if (ConstructorComandosMA2.EXPRESION_CARACTERES_CONTROL.test(executorTexto)) {
+      throw new Error('El identificador de executor contiene caracteres de control inválidos.');
+    }
+
+    const limpio = executorTexto.trim();
+    if (!ConstructorComandosMA2.EXPRESION_EXECUTOR_VALIDO.test(limpio)) {
+      throw new Error(
+        `El executor "${executorTexto}" no es válido. Debe ser un entero entre 1 y 999.`
+      );
+    }
+    return limpio;
+  }
+
+  private sanitizarNumeroCue(cueTexto: string): string {
+    if (ConstructorComandosMA2.EXPRESION_CARACTERES_CONTROL.test(cueTexto)) {
+      throw new Error('El número de cue contiene caracteres de control inválidos.');
+    }
+
+    const limpio = cueTexto.trim();
+    if (!ConstructorComandosMA2.EXPRESION_CUE_VALIDO.test(limpio) || Number(limpio) <= 0) {
+      throw new Error(
+        `El número de cue "${cueTexto}" no es válido. Se esperaba un número positivo (ej. "3" o "2.5").`
+      );
+    }
+    return limpio;
   }
 
   /**

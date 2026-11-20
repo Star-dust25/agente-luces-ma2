@@ -327,4 +327,68 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
   console.log('  ✓ 7. Órdenes compuestas y rechazo atómico (todo o nada): correcto');
 }
 
-console.log('\nTodos los casos de prueba de RF-03 pasaron exitosamente.');
+// ============================================================================
+// 8. Control de Cues / Escenas (RF-07) + órdenes mixtas + catálogo dinámico
+// ============================================================================
+{
+  TraductorLuces.restablecerCatalogoPorDefecto();
+
+  const cueSig = TraductorLuces.interpretarOrden('siguiente escena');
+  assert.equal(cueSig.exito, true);
+  assert.equal(cueSig.sintaxisMA2, 'Go Executor 1');
+  assert.deepEqual(cueSig.comandoPayload, {
+    accion: 'siguiente',
+    grupo: '1',
+    executor: '1',
+    valor: '',
+    tipo: 'cue',
+  });
+
+  const cueAnt = TraductorLuces.interpretarOrden('escena anterior en executor 3');
+  assert.equal(cueAnt.exito, true);
+  assert.equal(cueAnt.sintaxisMA2, 'GoBack Executor 3');
+  assert.equal(cueAnt.comandoPayload.accion, 'anterior');
+  assert.equal(cueAnt.comandoPayload.executor, '3');
+
+  const cueIr = TraductorLuces.interpretarOrden('ir a escena 2.5');
+  assert.equal(cueIr.exito, true);
+  assert.equal(cueIr.sintaxisMA2, 'Goto Cue 2.5 Executor 1');
+  assert.equal(cueIr.comandoPayload.accion, 'ir_cue');
+  assert.equal(cueIr.comandoPayload.valor, '2.5');
+
+  const cueOff = TraductorLuces.interpretarOrden('detener escena en executor 2');
+  assert.equal(cueOff.exito, true);
+  assert.equal(cueOff.sintaxisMA2, 'Off Executor 2');
+
+  const cueInvalido = TraductorLuces.interpretarOrden('ir a escena 0');
+  assert.equal(cueInvalido.exito, false);
+
+  const compuestaMixta = TraductorLuces.interpretarOrden('frontales al 50% y siguiente escena');
+  assert.equal(compuestaMixta.exito, true);
+  assert.deepEqual(compuestaMixta.sintaxisListaMA2, ['Group 1 At 50', 'Go Executor 1']);
+
+  // Catálogo dinámico + executorPorDefecto desde config.json
+  TraductorLuces.configurarCatalogoDinamico({
+    executorPorDefecto: 7,
+    grupos: [
+      {
+        id: '1',
+        nombre: 'Escenario Frente',
+        descripcion: 'Personalizado',
+        sinonimos: ['frontales', 'frente', 'proscenio'],
+      },
+    ],
+  });
+  const cueExecPersonalizado = TraductorLuces.interpretarOrden('siguiente escena');
+  assert.equal(cueExecPersonalizado.exito, true);
+  assert.equal(cueExecPersonalizado.sintaxisMA2, 'Go Executor 7');
+
+  const grupoAliasNuevo = TraductorLuces.interpretarOrden('proscenio al 60%');
+  assert.equal(grupoAliasNuevo.exito, true);
+  assert.equal(grupoAliasNuevo.sintaxisMA2, 'Group 1 At 60');
+
+  TraductorLuces.restablecerCatalogoPorDefecto();
+  console.log('  ✓ 8. Control de Cues (RF-07) y catálogo dinámico config.json: correcto');
+}
+
+console.log('\nTodos los casos de prueba de RF-03, RF-07 y catálogo dinámico pasaron exitosamente.');
