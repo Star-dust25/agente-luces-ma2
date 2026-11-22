@@ -1,18 +1,18 @@
 :root {
-  --negro: #000000;
+  --negro: #0a0b0e;
   --carmesi: #e61e32;
   --blanco: #ffffff;
   --gris-acero: #b3b3b3;
   --verde-ok: #22c55e;
   --ambar-alerta: #f59e0b;
 
-  --cristal-bg: rgba(18, 18, 20, 0.72);
-  --cristal-borde: rgba(255, 255, 255, 0.11);
-  --cristal-hover: rgba(255, 255, 255, 0.06);
-  --superficie-input: rgba(0, 0, 0, 0.52);
-  --superficie-sutil: rgba(255, 255, 255, 0.04);
-  --pista-vacia: #262626;
-  --modal-bg: rgba(14, 14, 18, 0.96);
+  --cristal-bg: #16181e;
+  --cristal-borde: #272b35;
+  --cristal-hover: #1c1f27;
+  --superficie-input: #101217;
+  --superficie-sutil: #20232c;
+  --pista-vacia: #2b303b;
+  --modal-bg: #1b1e26;
 
   font-family: 'Poppins', system-ui, -apple-system, sans-serif;
   color: var(--blanco);
@@ -153,9 +153,7 @@ input:focus-visible {
   -webkit-backdrop-filter: blur(24px) saturate(140%);
   border: 1px solid var(--cristal-borde);
   border-radius: 16px;
-  box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.65),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
 }
 
 /* Cabecera */
@@ -533,7 +531,7 @@ input:focus-visible {
   padding: 15px;
   border: 1px solid var(--cristal-borde);
   border-radius: 16px;
-  background: #111114;
+  background: #1b1e26;
   color: var(--blanco);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.38);
   display: flex;
@@ -1424,6 +1422,66 @@ input:focus-visible {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Jerarquía de superficies para Modo Oscuro (Cabina) sin alterar Modo Día */
+.lienzo:not([data-tema='dia']) .badge-sutil,
+.lienzo:not([data-tema='dia']) .chip-nivel:not(.activo),
+.rueda-panel:not([data-tema='dia']) .chip-nivel,
+.lienzo:not([data-tema='dia']) .boton-microfono:not(.escuchando):not(.transcribiendo),
+.lienzo:not([data-tema='dia']) .chip:not(.chip-sugerida),
+.lienzo:not([data-tema='dia']) .codigo-pill,
+.lienzo:not([data-tema='dia']) .vista-previa-inline code,
+.lienzo:not([data-tema='dia']) .item-actividad {
+  background: var(--superficie-sutil);
+  border-color: #313643;
+}
+
+.lienzo:not([data-tema='dia']) .chip-nivel:not(.activo):hover:not(:disabled),
+.rueda-panel:not([data-tema='dia']) .chip-nivel:hover:not(:disabled),
+.lienzo:not([data-tema='dia']) .boton-microfono:not(.escuchando):not(.transcribiendo):hover:not(:disabled),
+.lienzo:not([data-tema='dia']) .badge-toggle:hover {
+  background: #292d38;
+}
+
+.lienzo:not([data-tema='dia']) .chip:not(.chip-sugerida):hover {
+  background: #292d38;
+  border-color: rgba(230, 30, 50, 0.55);
+  color: var(--blanco);
+}
+
+.lienzo:not([data-tema='dia']) .barra-voz {
+  background: #16181e;
+  border-top: 1px solid #2b303b;
+}
+
+.lienzo:not([data-tema='dia']) .area-texto-con-voz,
+.lienzo:not([data-tema='dia']) .input-cue-compacto,
+.lienzo:not([data-tema='dia']) .campo-form input,
+.lienzo:not([data-tema='dia']) .fila-editable input,
+.lienzo:not([data-tema='dia']) .vacio {
+  background: var(--superficie-input);
+  border: 1px solid #2b303b;
+}
+
+.lienzo:not([data-tema='dia']) .vacio {
+  border-radius: 10px;
+}
+
+.lienzo:not([data-tema='dia']) .area-texto-con-voz:focus-within,
+.lienzo:not([data-tema='dia']) .input-cue-compacto:focus,
+.lienzo:not([data-tema='dia']) .campo-form input:focus,
+.lienzo:not([data-tema='dia']) .fila-editable input:focus {
+  border-color: var(--carmesi);
+}
+
+.rueda-panel:not([data-tema='dia']),
+.lienzo:not([data-tema='dia']) .modal-caja,
+.lienzo:not([data-tema='dia']) .menu-contextual,
+.lienzo:not([data-tema='dia']) .toast {
+  background: var(--modal-bg);
+  border-color: #323746;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65);
 }
 
 @media (max-width: 1080px) {
