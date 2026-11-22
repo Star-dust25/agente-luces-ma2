@@ -936,11 +936,6 @@ input:focus-visible {
   transition: width 70ms linear;
 }
 
-.badge-voz-modo {
-  margin-left: auto;
-  font-size: 0.7rem;
-}
-
 .progreso-voz-texto {
   font-size: 0.7rem;
   color: var(--ambar-alerta);

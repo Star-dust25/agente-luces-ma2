@@ -1,7 +1,7 @@
 {
   "name": "agente-luces-ma2",
   "version": "1.0.0",
-  "description": "",
+  "description": "Aplicación Electron para controlar grandMA2 onPC mediante texto, voz local y Telnet",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
@@ -10,13 +10,10 @@
     "start:all": "npm --prefix frontend run build && npm run build && electron .",
     "test": "npm run build && node tests/constructorComandosMA2.test.cjs && node tests/gestorConfiguracion.test.cjs && node tests/servicioVozLocal.test.cjs && node tests/clienteTelnetMA2.test.cjs && npm --prefix frontend test"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["electron", "react", "typescript", "grandma2", "telnet", "whisper", "iluminacion"],
   "type": "commonjs",
   "dependencies": {
-    "@huggingface/transformers": "^4.3.2",
-    "chalk": "^6.0.1"
+    "@huggingface/transformers": "^4.3.2"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
