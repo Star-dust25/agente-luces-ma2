@@ -78,10 +78,9 @@ const CONFIGURACION_POR_DEFECTO_UI: ConfiguracionSistemaMA2 = {
 };
 
 const EJEMPLOS_RAPIDOS = [
-  'Frontales al 70% en azul',
-  'Frontales al 100% y contras apagadas',
-  'Siguiente escena',
-  'Ir a escena 3',
+  'Frontales al 50%',
+  'Contraluz en azul',
+  'Frontales 100% y contras apagadas',
 ] as const;
 
 const NIVELES_RAPIDOS = [0, 25, 50, 75, 100] as const;
@@ -97,25 +96,53 @@ const TECLAS_SLIDER_CONFIRMACION: ReadonlySet<string> = new Set([
   'PageDown',
 ]);
 
-function etiquetaEstadoConexion(estado: EstadoConexionMA2 | 'WEB'): {
+function etiquetaEstadoConexion(
+  estado: EstadoConexionMA2 | 'WEB',
+  host: string,
+  puerto: number
+): {
   texto: string;
   clase: string;
+  detalle: string;
 } {
   switch (estado) {
     case 'AUTENTICADO':
-      return { texto: 'MA2 Autenticado', clase: 'badge-estado-exito' };
+      return {
+        texto: 'Conectado',
+        clase: 'badge-estado-exito',
+        detalle: `Sesión Telnet autenticada en GrandMA2 (${host}:${puerto})`,
+      };
     case 'CONECTADO':
-      return { texto: 'TCP Conectado', clase: 'badge-estado-ambar' };
+      return {
+        texto: 'Autenticando...',
+        clase: 'badge-estado-ambar',
+        detalle: `Socket TCP conectado a ${host}:${puerto}, autenticando sesión...`,
+      };
     case 'CONECTANDO':
-      return { texto: 'Conectando...', clase: 'badge-estado-ambar' };
+      return {
+        texto: 'Conectando...',
+        clase: 'badge-estado-ambar',
+        detalle: `Conectando con GrandMA2 en ${host}:${puerto}...`,
+      };
     case 'RECONECTANDO':
-      return { texto: 'Reconectando...', clase: 'badge-estado-ambar' };
+      return {
+        texto: 'Reconectando...',
+        clase: 'badge-estado-ambar',
+        detalle: `Reintentando conexión con GrandMA2 (${host}:${puerto})...`,
+      };
     case 'WEB':
-      return { texto: 'Simulador Web', clase: 'badge-estado-ambar' };
+      return {
+        texto: 'Modo prueba',
+        clase: 'badge-estado-ambar',
+        detalle: 'Simulador web local sin conexión TCP real',
+      };
     case 'ERROR':
-      return { texto: 'Error Telnet', clase: 'badge-estado-error' };
     case 'DESCONECTADO':
-      return { texto: 'Desconectado', clase: 'badge-estado-error' };
+      return {
+        texto: 'Sin conexión',
+        clase: 'badge-estado-error',
+        detalle: `Sin conexión Telnet con GrandMA2 (${host}:${puerto})`,
+      };
   }
 }
 
@@ -224,6 +251,8 @@ export default function App() {
   const [estadoVoz, setEstadoVoz] = useState<EstadoVoz>('inactivo');
   const [nivelVoz, setNivelVoz] = useState<number>(0);
   const [progresoVoz, setProgresoVoz] = useState<string | null>(null);
+  const [errorVozReciente, setErrorVozReciente] = useState<string | null>(null);
+  const [atajosAbiertos, setAtajosAbiertos] = useState<boolean>(false);
 
   const gruposRef = useRef<Record<string, InstantaneaGrupo>>(grupos);
   gruposRef.current = grupos;
@@ -240,6 +269,7 @@ export default function App() {
   const timerBlackoutRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const botonRuedaRef = useRef<HTMLButtonElement | null>(null);
+  const atajosRef = useRef<HTMLDivElement | null>(null);
   const enviandoRef = useRef(false);
   const ultimoIntentoRef = useRef<{ clave: string; instante: number } | null>(null);
 
@@ -417,6 +447,29 @@ export default function App() {
   }, [menu]);
 
   useEffect(() => {
+    if (!atajosAbiertos) {
+      return undefined;
+    }
+    const cerrarFuera = (evento: globalThis.PointerEvent) => {
+      const destino = evento.target;
+      if (destino instanceof Node && !atajosRef.current?.contains(destino)) {
+        setAtajosAbiertos(false);
+      }
+    };
+    const cerrarEscape = (evento: KeyboardEvent) => {
+      if (evento.key === 'Escape') {
+        setAtajosAbiertos(false);
+      }
+    };
+    document.addEventListener('pointerdown', cerrarFuera, true);
+    document.addEventListener('keydown', cerrarEscape, true);
+    return () => {
+      document.removeEventListener('pointerdown', cerrarFuera, true);
+      document.removeEventListener('keydown', cerrarEscape, true);
+    };
+  }, [atajosAbiertos]);
+
+  useEffect(() => {
     const timers = timersRef.current;
     return () => {
       for (const timer of timers.values()) {
@@ -547,7 +600,7 @@ export default function App() {
               sintaxisEnviadas.push(comandoFinal);
               registrarLog({
                 nivel: 'info',
-                titulo: `Enviado a MA2 · ${etiquetaPaso}`,
+                titulo: etiquetaPaso,
                 sintaxisMA2: comandoFinal,
                 comandosPayload: [payload],
                 textoOriginal,
@@ -570,7 +623,7 @@ export default function App() {
             sintaxisEnviadas.push(sintaxisEsperada);
             registrarLog({
               nivel: 'info',
-              titulo: `Simulación Web · ${etiquetaPaso}`,
+              titulo: etiquetaPaso,
               sintaxisMA2: sintaxisEsperada,
               comandosPayload: [payload],
               textoOriginal,
@@ -664,6 +717,7 @@ export default function App() {
     try {
       setNivelVoz(0);
       setProgresoVoz(null);
+      setErrorVozReciente(null);
       await grabadoraRef.current.iniciar((nivel) => setNivelVoz(nivel));
       setEstadoVoz('escuchando');
     } catch (error: unknown) {
@@ -671,6 +725,7 @@ export default function App() {
       setEstadoVoz('inactivo');
       setNivelVoz(0);
       setProgresoVoz(null);
+      setErrorVozReciente(msg);
       lanzarToast('error', 'Micrófono no disponible', msg);
       registrarLog({
         nivel: 'error',
@@ -694,6 +749,7 @@ export default function App() {
       const muestras16k = await grabadoraRef.current.detener();
 
       if (window.api === undefined) {
+        setErrorVozReciente('Solo disponible en Electron');
         lanzarToast(
           'advertencia',
           'Transcripción local requiere Electron',
@@ -704,6 +760,7 @@ export default function App() {
 
       const resultado = await window.api.transcribirAudio(muestras16k);
       if (!resultado.exito || resultado.texto.trim().length === 0) {
+        setErrorVozReciente(resultado.mensaje);
         lanzarToast('advertencia', 'Sin transcripción válida', resultado.mensaje);
         registrarLog({
           nivel: 'advertencia',
@@ -716,6 +773,7 @@ export default function App() {
       }
 
       const textoTranscrito = resultado.texto.trim();
+      setErrorVozReciente(null);
       setOrden(textoTranscrito);
       setSugerenciasOcultas(true);
       inputRef.current?.focus();
@@ -731,6 +789,7 @@ export default function App() {
       }
     } catch (error: unknown) {
       const detalle = error instanceof Error ? error.message : String(error);
+      setErrorVozReciente(detalle);
       lanzarToast('error', 'Error al transcribir audio', detalle);
     } finally {
       setEstadoVoz('inactivo');
@@ -1123,7 +1182,11 @@ export default function App() {
   const grupoEnMenu = menu?.tipo === 'grupo' ? grupos[menu.idGrupo] : undefined;
   const logEnMenu =
     menu?.tipo === 'log' ? logs.find((item) => item.id === menu.idLog) : undefined;
-  const infoEstado = etiquetaEstadoConexion(estadoConexion);
+  const infoEstado = etiquetaEstadoConexion(
+    estadoConexion,
+    configuracion.conexion.host,
+    configuracion.conexion.puerto
+  );
   const colorRellenoSlider = colorActivoSeleccion.hex ?? '#e61e32';
   const estiloSlider = {
     '--porcentaje-slider': `${valorSlider}%`,
@@ -1140,7 +1203,6 @@ export default function App() {
           <div className="marca">
             <span className="marca-punto" aria-hidden="true" />
             <h1>GrandMA2</h1>
-            <span className="badge badge-sutil">Control NLP</span>
           </div>
 
           <div className="cabecera-derecha">
@@ -1150,7 +1212,7 @@ export default function App() {
               <span
                 className={`badge ${infoEstado.clase}`}
                 role="status"
-                title={`Conexión ${configuracion.conexion.host}:${configuracion.conexion.puerto}`}
+                title={infoEstado.detalle}
               >
                 <span className="indicador-estado" />
                 {infoEstado.texto}
@@ -1166,11 +1228,28 @@ export default function App() {
             </button>
             <button
               type="button"
-              className="btn-fantasma"
+              className="btn-fantasma btn-sincronizar"
               onClick={() => void sincronizar(true)}
               disabled={cargando}
+              aria-label="Reconectar consola"
+              title="Reconectar consola"
             >
-              Sincronizar
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path d="M16 16h5v5" />
+              </svg>
             </button>
             <button
               type="button"
@@ -1346,9 +1425,11 @@ export default function App() {
                 );
               })}
             </div>
-            <span className="color-activo-etiqueta">
-              {colorActivoSeleccion.nombre ?? 'Sin color'}
-            </span>
+            {colorActivoSeleccion.nombre !== null && (
+              <span className="color-activo-etiqueta">
+                {colorActivoSeleccion.nombre}
+              </span>
+            )}
             <div className="rueda-anclaje">
               <button
                 ref={botonRuedaRef}
@@ -1385,8 +1466,12 @@ export default function App() {
         {/* Bloque compacto de Escenas / Cues (RF-07) */}
         <section className="barra-cues glass" aria-label="Control de escenas y cues">
           <div className="cues-identidad">
-            <span className="cues-titulo">Escenas</span>
-            <span className="badge badge-sutil">Exec {configuracion.executorPorDefecto}</span>
+            <span
+              className="cues-titulo"
+              title={`Executor activo: ${configuracion.executorPorDefecto}`}
+            >
+              Escenas
+            </span>
           </div>
 
           <div className="cues-controles">
@@ -1395,7 +1480,7 @@ export default function App() {
               className="chip-nivel"
               disabled={enviando}
               onClick={() => void ejecutarAccionCue('anterior')}
-              title={`Retroceder escena (GoBack Executor ${configuracion.executorPorDefecto})`}
+              title={`Retroceder escena (Executor ${configuracion.executorPorDefecto})`}
             >
               ◀ Anterior
             </button>
@@ -1404,20 +1489,21 @@ export default function App() {
               className="chip-nivel activo"
               disabled={enviando}
               onClick={() => void ejecutarAccionCue('siguiente')}
-              title={`Siguiente escena (Go Executor ${configuracion.executorPorDefecto})`}
+              title={`Siguiente escena (Executor ${configuracion.executorPorDefecto})`}
             >
               ▶ Siguiente
             </button>
 
             <div className="cue-salto-directo">
               <label htmlFor="cue-numero" className="texto-gris">
-                Cue
+                Escena
               </label>
               <input
                 id="cue-numero"
                 type="text"
                 inputMode="decimal"
                 className="input-cue-compacto"
+                aria-label="Número de escena"
                 value={cueNumeroInput}
                 onChange={(e) => setCueNumeroInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -1443,9 +1529,9 @@ export default function App() {
               className="btn-carmesi-borde"
               disabled={enviando}
               onClick={() => void ejecutarAccionCue('detener')}
-              title={`Detener secuencia (Off Executor ${configuracion.executorPorDefecto})`}
+              title={`Detener secuencia (Executor ${configuracion.executorPorDefecto})`}
             >
-              ⏹ Off
+              ⏹ Detener
             </button>
           </div>
         </section>
@@ -1456,9 +1542,52 @@ export default function App() {
           <section className="panel glass">
             <div className="panel-titulo">
               <h2>Orden de Iluminación</h2>
-              <span className="texto-gris" title="Atajos globales disponibles">
-                Alt+1..6 grupo · Alt+0 todos · Ctrl+K o / enfocar
-              </span>
+              <div
+                className="atajos-contenedor"
+                ref={atajosRef}
+                onMouseEnter={() => setAtajosAbiertos(true)}
+                onMouseLeave={() => setAtajosAbiertos(false)}
+              >
+                <button
+                  type="button"
+                  className={`btn-atajos${atajosAbiertos ? ' activo' : ''}`}
+                  aria-label="Ver atajos de teclado"
+                  aria-expanded={atajosAbiertos}
+                  aria-controls={atajosAbiertos ? 'popover-atajos-teclado' : undefined}
+                  onClick={() => setAtajosAbiertos((abierto) => !abierto)}
+                >
+                  ?
+                </button>
+                {atajosAbiertos && (
+                  <div
+                    id="popover-atajos-teclado"
+                    className="popover-atajos"
+                    role="tooltip"
+                    aria-label="Atajos de teclado"
+                  >
+                    <div className="popover-atajos-fila">
+                      <span>Seleccionar grupo</span>
+                      <kbd>Alt + 1..6</kbd>
+                    </div>
+                    <div className="popover-atajos-fila">
+                      <span>Seleccionar todos</span>
+                      <kbd>Alt + 0</kbd>
+                    </div>
+                    <div className="popover-atajos-fila">
+                      <span>Enfocar orden</span>
+                      <kbd>Ctrl+K /</kbd>
+                    </div>
+                    <div className="popover-atajos-fila">
+                      <span>Mantener para hablar</span>
+                      <kbd>Alt + Espacio</kbd>
+                    </div>
+                    <div className="popover-atajos-fila">
+                      <span>Historial de órdenes</span>
+                      <kbd>↑ / ↓</kbd>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="campo-contenedor">
@@ -1470,9 +1599,10 @@ export default function App() {
                     setOrden(e.target.value);
                     setIndiceHistorial(-1);
                     setSugerenciasOcultas(false);
+                    setErrorVozReciente(null);
                   }}
                   onKeyDown={manejarTecladoOrden}
-                  placeholder='Ej. "Frontales al 70% en azul", "Siguiente escena" o mantén Alt+Espacio para dictar'
+                  placeholder='Escribe o dicta una orden, ej. "Frontales al 70% en azul"'
                   maxLength={220}
                   aria-label="Instrucción de iluminación"
                 />
@@ -1486,17 +1616,30 @@ export default function App() {
                     onPointerCancel={manejarPointerCancelMic}
                     onKeyDown={manejarKeyDownMic}
                     disabled={estadoVoz === 'transcribiendo'}
-                    title="Clic para iniciar/detener o mantén presionado (Push-to-Talk · Alt+Espacio)"
+                    title="Mantén presionado o usa Alt+Espacio para dictar"
                   >
-                    <span className="mic-icono" aria-hidden="true">
-                      ●
-                    </span>
+                    <svg
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="mic-icono"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                      <line x1="12" x2="12" y1="19" y2="22" />
+                    </svg>
                     <span>
                       {estadoVoz === 'escuchando'
                         ? 'Escuchando...'
                         : estadoVoz === 'transcribiendo'
                           ? 'Transcribiendo...'
-                          : 'Voz (Alt+Espacio)'}
+                          : 'Hablar'}
                     </span>
                   </button>
 
@@ -1515,11 +1658,11 @@ export default function App() {
                     </span>
                   )}
 
-                  <span className="texto-gris badge-voz-modo">
-                    {configuracion.interfaz.autoEjecutarVoz
-                      ? 'Voz: Auto-envío'
-                      : 'Voz: Confirmar con Enter'}
-                  </span>
+                  {estadoVoz === 'inactivo' && errorVozReciente !== null && (
+                    <span className="progreso-voz-texto" role="status" title={errorVozReciente}>
+                      {errorVozReciente}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -1566,9 +1709,7 @@ export default function App() {
                   ) : (
                     <span className="texto-gris">{interpretacion.mensajeError}</span>
                   )
-                ) : (
-                  <span className="texto-gris">Vista previa de sintaxis GrandMA2</span>
-                )}
+                ) : null}
               </div>
 
               <div className="acciones-consola">
@@ -1602,29 +1743,28 @@ export default function App() {
             <div className="panel-titulo">
               <h2>Actividad</h2>
               <div className="meta-derecha">
-                <span className="badge badge-sutil">{logs.length}</span>
-                <button
-                  type="button"
-                  className="btn-fantasma"
-                  disabled={pilaDeshacer.length === 0 || enviando}
-                  onClick={() => void ejecutarDeshacer()}
-                  title={
-                    pilaDeshacer.length > 0
-                      ? `Deshacer: ${pilaDeshacer[0].etiqueta}`
-                      : 'No hay acciones recientes para deshacer'
-                  }
-                >
-                  Deshacer
-                </button>
-                <button
-                  type="button"
-                  className="btn-fantasma"
-                  disabled={logs.length === 0}
-                  onClick={() => setLogs([])}
-                  title="Vaciar lista visual de logs"
-                >
-                  Limpiar
-                </button>
+                {logs.length > 0 && <span className="badge badge-sutil">{logs.length}</span>}
+                {pilaDeshacer.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn-fantasma"
+                    disabled={enviando}
+                    onClick={() => void ejecutarDeshacer()}
+                    title={`Deshacer: ${pilaDeshacer[0].etiqueta}`}
+                  >
+                    Deshacer
+                  </button>
+                )}
+                {logs.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn-fantasma"
+                    onClick={() => setLogs([])}
+                    title="Vaciar lista visual de logs"
+                  >
+                    Limpiar
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1636,7 +1776,7 @@ export default function App() {
                   </div>
                 ))
               ) : logs.length === 0 ? (
-                <p className="vacio">Sin comandos ejecutados todavía.</p>
+                <p className="vacio">Sin actividad reciente</p>
               ) : (
                 logs.map((log) => (
                   <div
@@ -1646,7 +1786,9 @@ export default function App() {
                   >
                     <div className="item-izquierda">
                       <span className="hora">{log.hora}</span>
-                      <span className="item-titulo">{log.titulo}</span>
+                      <span className="item-titulo" title={log.titulo}>
+                        {log.titulo}
+                      </span>
                     </div>
 
                     <div className="item-derecha">

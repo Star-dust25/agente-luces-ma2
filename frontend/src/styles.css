@@ -751,6 +751,81 @@ input:focus-visible {
   gap: 6px;
 }
 
+.btn-sincronizar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 31px;
+  padding: 6px 8px;
+}
+
+.btn-sincronizar svg {
+  display: block;
+}
+
+.atajos-contenedor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.btn-atajos {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--cristal-borde);
+  background: var(--superficie-sutil);
+  color: var(--gris-acero);
+  font-size: 0.74rem;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+  transition: color 130ms ease, border-color 130ms ease, background-color 130ms ease;
+}
+
+.btn-atajos:hover,
+.btn-atajos.activo {
+  color: var(--blanco);
+  border-color: var(--carmesi);
+}
+
+.popover-atajos {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 55;
+  width: 246px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--cristal-borde);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--gris-acero);
+}
+
+.popover-atajos-fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.popover-atajos-fila kbd {
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--cristal-borde);
+  background: var(--superficie-sutil);
+  color: var(--blanco);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.67rem;
+  white-space: nowrap;
+}
+
 /* Editor de orden + barra de voz */
 .campo-contenedor {
   display: flex;
@@ -875,11 +950,16 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-/* Cuadrícula simétrica 2x2 para ejemplos y fila limpia para sugerencias */
+/* Fila horizontal compacta para ejemplos y fila limpia para sugerencias */
 .chips-ejemplos {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.chips-ejemplos .chip {
+  flex: 1 1 0;
+  min-width: 140px;
 }
 
 .chips-sugerencias {
@@ -1042,6 +1122,7 @@ input:focus-visible {
 
 /* Lista de actividad */
 .lista-actividad {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1089,12 +1170,24 @@ input:focus-visible {
   flex: none;
 }
 
+.item-actividad .codigo-pill {
+  padding: 2px 7px;
+  font-size: 0.7rem;
+  color: var(--gris-acero);
+}
+
 .vacio {
-  margin: auto 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
   text-align: center;
   font-size: 0.8rem;
   color: var(--gris-acero);
-  padding: 36px 0;
+  padding: 24px 0;
+  border: 0;
+  background: transparent;
 }
 
 /* Modal de Ajustes */
@@ -1426,6 +1519,7 @@ input:focus-visible {
 
 /* Jerarquía de superficies para Modo Oscuro (Cabina) sin alterar Modo Día */
 .lienzo:not([data-tema='dia']) .badge-sutil,
+.lienzo:not([data-tema='dia']) .btn-atajos,
 .lienzo:not([data-tema='dia']) .chip-nivel:not(.activo),
 .rueda-panel:not([data-tema='dia']) .chip-nivel,
 .lienzo:not([data-tema='dia']) .boton-microfono:not(.escuchando):not(.transcribiendo),
@@ -1437,6 +1531,8 @@ input:focus-visible {
   border-color: #313643;
 }
 
+.lienzo:not([data-tema='dia']) .btn-atajos:hover,
+.lienzo:not([data-tema='dia']) .btn-atajos.activo,
 .lienzo:not([data-tema='dia']) .chip-nivel:not(.activo):hover:not(:disabled),
 .rueda-panel:not([data-tema='dia']) .chip-nivel:hover:not(:disabled),
 .lienzo:not([data-tema='dia']) .boton-microfono:not(.escuchando):not(.transcribiendo):hover:not(:disabled),
@@ -1458,14 +1554,9 @@ input:focus-visible {
 .lienzo:not([data-tema='dia']) .area-texto-con-voz,
 .lienzo:not([data-tema='dia']) .input-cue-compacto,
 .lienzo:not([data-tema='dia']) .campo-form input,
-.lienzo:not([data-tema='dia']) .fila-editable input,
-.lienzo:not([data-tema='dia']) .vacio {
+.lienzo:not([data-tema='dia']) .fila-editable input {
   background: var(--superficie-input);
   border: 1px solid #2b303b;
-}
-
-.lienzo:not([data-tema='dia']) .vacio {
-  border-radius: 10px;
 }
 
 .lienzo:not([data-tema='dia']) .area-texto-con-voz:focus-within,
@@ -1476,6 +1567,7 @@ input:focus-visible {
 }
 
 .rueda-panel:not([data-tema='dia']),
+.lienzo:not([data-tema='dia']) .popover-atajos,
 .lienzo:not([data-tema='dia']) .modal-caja,
 .lienzo:not([data-tema='dia']) .menu-contextual,
 .lienzo:not([data-tema='dia']) .toast {
