@@ -1,105 +1,117 @@
 # Guía de pruebas manuales: Hitos 2 y 3
 
-**Equipo:** laptop Windows con Electron y grandMA2 onPC. **Fecha de preparación:** 20 de noviembre de 2026. Esta guía comprueba lo que las pruebas unitarias y el servidor Telnet simulado no pueden demostrar. Registra cada resultado como APROBADO, FALLIDO o PENDIENTE MANUAL en una copia de `VALIDACION_HITOS_2_Y_3.md`.
+**Actualizada:** 22 de noviembre de 2026 para la rama `feature/ui-y-diccionario` (revisión `a55abab` al iniciar el bloque). Sustituye los nombres de controles de la guía preparada el 20 de noviembre. **Ningún paso de esta guía está marcado como ejecutado.** Registra cada caso como APROBADO, FALLIDO, PENDIENTE MANUAL o NO EVALUADO en la matriz de `VALIDACION_HITOS_2_Y_3.md`, con fecha, versión, equipo y evidencia.
 
-## Preparación común
+## Preparación común en Windows
 
-1. Acuerda con el operador una ventana de pruebas y abre un **showfile de ensayo** en grandMA2 onPC. Desconecta salidas DMX/Art-Net/sACN o usa fixtures de prueba sin luminarias conectadas. No uses el showfile del espectáculo activo.
-2. Haz una copia de la configuración de usuario de Electron (`app.getPath('userData')/config.json`) y anota los valores de prueba de IP, puerto, usuario, executor y presets. El `config.json` del repositorio sirve de plantilla, no es necesariamente el archivo activo.
-3. Compila con `npm.cmd --prefix frontend run build` y `npm.cmd run build`; abre la app con `npm.cmd start`. Confirma en grandMA2 que Remote Command/Telnet y la cuenta de prueba están habilitados. Usa `127.0.0.1:30000` solo si grandMA2 onPC corre en la misma laptop y ese es su puerto configurado.
-4. Prepara una carpeta de evidencias con fecha. En cada captura incluye reloj, estado de conexión, acción y resultado. Oculta contraseñas y datos de producción.
-5. Si aparece un comportamiento peligroso o inesperado, deja de enviar órdenes, desconecta salidas, registra pantalla y log, vuelve a la copia de configuración y avisa al operador. No repitas Blackout en un sistema en vivo.
+1. En VS Code, abre la carpeta del proyecto y una terminal PowerShell. Ejecuta `npm.cmd --prefix frontend run build`, `npm.cmd run build` y luego `npm.cmd start`. Espera la ventana de **Electron**; una página abierta solo en navegador dice **Modo prueba** y no prueba Telnet ni Whisper mediante IPC.
+2. Acuerda la ventana con el operador de grandMA2 onPC. Abre un **showfile de ensayo** con grupos, presets y un executor conocidos. Aísla salidas físicas DMX, Art-Net y sACN o usa fixtures de ensayo sin luminarias conectadas. **Nunca ejecutes Blackout sobre una función activa.** No uses un showfile de producción.
+3. Abre **Ajustes → Conexión & Cabina**. Anota IP/host, puerto Telnet, cuenta de ensayo y **Executor por defecto (Cues)**. Habilita la consola para Remote Command/Telnet según la instalación. Usa `127.0.0.1:30000` únicamente si onPC comparte laptop y ese puerto corresponde a su configuración. En **Grupos (G1–G6)** y **Colores (4.1–4.9)** verifica las entradas del showfile.
+4. Antes de cambiar ajustes, copia el archivo activo `app.getPath('userData')/config.json` a una carpeta de ensayo. El `config.json` del repositorio es plantilla. Oculta contraseña y datos operativos en capturas. Crea una carpeta de evidencias con fecha, versión, hora de Windows y nombre de cada caso; guarda capturas de Electron y de onPC, y logs cuando corresponda.
+5. Mantén desmarcada **Auto-ejecutar comandos dictados por voz (por seguridad en vivo se recomienda desactivado)** salvo durante la prueba controlada de autoenvío. Si observas una orden inesperada, detén los envíos, conserva capturas/logs y avisa al operador. Reanuda solo tras comprobar la causa en el showfile aislado.
 
-## 1. Inicio, conexión y recursos locales
+Una entrada de **Actividad** con «Comando entregado a Telnet; ejecución física no confirmada.» confirma entrega al socket. Para aprobar un efecto físico, compara también el estado de grandMA2 onPC y del showfile. La cápsula inferior muestra avisos importantes; los envíos normales quedan en Actividad.
 
-1. **Abrir:** grandMA2 onPC con showfile de ensayo y luego la ventana de ClauCode Lights en Electron.
-2. **Configurar:** IP/puerto y cuenta de prueba; conexión de la laptop habilitada. Mantén `autoEjecutarVoz` desactivado.
-3. **Pulsar:** **Sincronizar** y espera el estado; abre **Ajustes** para confirmar que aparecen grupos, colores y presets.
-4. **Observar:** la app abre sin archivos faltantes, la fuente Poppins se ve correctamente y el estado cambia a **MA2 Autenticado** solo tras la confirmación de login.
-5. **Pasa/falla:** pasa si UI, catálogo y conexión coinciden con la configuración de prueba. Falla si falta el frontend, hay fuentes sustituidas o se indica autenticación sin sesión real.
-6. **Guardar:** captura completa de la app, estado de sesión en grandMA2 y hora.
-7. **Si hay error:** comprueba primero IP, puerto, habilitación Telnet y cuenta; anota el mensaje exacto antes de modificar nada.
+## 1. Inicio, conexión e indicadores
 
-## 2. Rueda cromática, Modo Día y controles de color
+- **Objetivo:** comprobar inicio de Electron, recursos locales y estados de conexión.
+- **Preparación:** showfile de ensayo abierto, Telnet y cuenta de prueba configurados; mantén internet disponible para este caso.
+- **Pasos en Electron:** abre la app; observa la cabecera antes y después del login; pulsa el **icono Reconectar consola** (ayuda emergente y nombre accesible); abre **Ajustes** y revisa grupos y colores. Con el operador, corta y restablece solo la conexión de ensayo para observar estados.
+- **Resultado esperado:** la cabecera muestra **Conectando...** o **Reconectando...** durante intentos, **Autenticando...** con socket abierto y **Conectado** tras confirmación de login; ante error, **Sin conexión**. Poppins y el catálogo aparecen. El icono refresca estado/configuración; el cliente Telnet gestiona los reintentos automáticos.
+- **Criterio de aprobación:** los estados corresponden a la sesión real y la vista carga sin recursos faltantes. No atribuyas una reconexión al icono si solo coincidió con un reintento automático.
+- **Evidencia:** capturas de cada estado con hora, detalle del indicador al pasar el puntero, estado de login en onPC y log de conexión.
+- **Ante fallo:** registra texto exacto y hora; comprueba host, puerto, credenciales y habilitación Telnet antes de repetir.
 
-1. **Abrir:** ClauCode Lights y el panel **Ajustes**; deja grandMA2 en el showfile de ensayo.
-2. **Configurar:** verifica que existan presets del Pool 4. Selecciona primero un grupo; para varios, usa Ctrl+Clic en dos tarjetas. Prueba también el tema **Modo Día**.
-3. **Pulsar:** **Rueda**; arrastra el indicador, pulsa **Cancelar**, vuelve a abrir y usa **Aplicar color** con un color aproximado. Repite con la ventana estrecha y con Escape/clic fuera.
-4. **Observar:** el círculo completo queda dentro de un panel opaco por encima de Escenas y Actividad; no hay degradado fuera del disco. HEX, HSV, nombre, preset y diferencia se leen. Arrastrar/cancelar no crea entradas en Actividad ni líneas Telnet; Aplicar envía solo el preset mostrado a los grupos seleccionados. El panel no se corta al redimensionar y el foco vuelve al botón tras Escape/Cancelar.
-5. **Pasa/falla:** pasa si la apariencia y los envíos cumplen lo anterior en Cabina y Día. Falla si algo queda tapado, si cambia una luz durante el arrastre o si el color elegido se presenta como reproducción física exacta cuando es aproximado.
-6. **Guardar:** capturas con rueda abierta en ambos temas y ventana estrecha; captura de Actividad antes/después de arrastrar y línea de comando de grandMA2 tras Aplicar.
-7. **Si hay error:** cancela el panel; no uses **Aplicar** de nuevo hasta guardar captura, tamaño de ventana y pasos reproducibles.
+## 2. Disposición, slider, Actividad y temas
 
-## 3. Voz con Confirmar con Enter — RF-06
+- **Objetivo:** verificar la organización actual y el comportamiento visible de intensidad y avisos.
+- **Preparación:** grupos de ensayo seleccionables, salidas aisladas y Actividad visible. Anota intensidad inicial en onPC.
+- **Pasos en Electron:** observa una tarjeta de grupo y selecciona dos con Ctrl+Clic; abre el botón **?** junto a **Orden de Iluminación**; arrastra el slider de intensidad y mantenlo sin soltar, luego suéltalo. Repite con teclado. Abre **Ajustes → Conexión & Cabina**, guarda **Modo Día (Gris Suave)** y luego **Modo Cabina (Oscuro)**. Provoca solo un error inocuo de entrada para comprobar el aviso, sin enviar una orden peligrosa.
+- **Resultado esperado:** cada tarjeta reúne punto de color, porcentaje y barra de intensidad; la cabecera separa el estado de conexión, **Ajustes**, icono de reconexión y **Blackout**. La barra **Escenas** queda entre grupos y paneles. No aparecen etiquetas visibles `Control NLP` ni `Exec 1`. El slider muestra el valor mientras se arrastra y envía una orden al soltar; con teclado, al soltar la tecla. La entrada nueva de **Actividad** destella aproximadamente **600 ms**. Un solo aviso en cápsula inferior central muestra errores/cambios importantes; no aparece un aviso de éxito por cada envío. **?** despliega atajos, incluido Alt + Espacio.
+- **Criterio de aprobación:** un cambio de slider produce un solo comando final, el diseño es legible en ambos temas y los avisos no tapan los controles. La prueba visual no acredita que una luminaria haya respondido.
+- **Evidencia:** video corto del arrastre antes/después de soltar, Actividad, comando de onPC, capturas de ambos temas y del aviso con hora.
+- **Ante fallo:** deja de mover el control, conserva el valor enviado y una grabación reproducible; restaura el nivel del showfile con el operador.
 
-1. **Abrir:** Electron y panel de **Orden de iluminación**; prepara micrófono Windows y grandMA2 en ensayo.
-2. **Configurar:** en Ajustes deja **Voz: Confirmar con Enter**; concede permiso de micrófono si Windows lo solicita. La primera carga del modelo puede necesitar internet.
-3. **Pulsar:** botón **Voz** para iniciar/detener, luego prueba mantenerlo presionado; repite con **Alt+Espacio**. Di una instrucción segura como «frontales al 50 por ciento» y otra no interpretable.
-4. **Observar:** medidor de audio, transcripción en español dentro del campo, vista previa y **ningún envío** hasta pulsar Enter. La frase no interpretable debe quedar sin payload ejecutable y mostrar un aviso.
-5. **Pasa/falla:** pasa si una frase clara se transcribe razonablemente y Enter produce el comando previsto, mientras una frase confusa no ejecuta nada. Falla si se envía antes de confirmar o queda el micrófono activo tras soltar/cancelar.
-6. **Guardar:** capturas de estado Escuchando, texto transcrito, vista previa y Actividad antes/después de Enter; anota frase pronunciada y frase reconocida.
-7. **Si hay error:** revisa permiso, dispositivo predeterminado y volumen; copia el mensaje exacto. Usa entrada por texto mientras se investiga.
+## 3. Colores rápidos y rueda cromática
 
-## 4. Voz con autoenvío y salida ASR errónea — RF-06
+- **Objetivo:** comprobar presets rápidos, selección de color aproximada y panel flotante.
+- **Preparación:** presets válidos del Pool 4 en el showfile; selecciona un grupo y luego dos grupos con Ctrl+Clic. Mantén salidas aisladas.
+- **Pasos en Electron:** pulsa un botón redondo de color rápido; coteja su `title` con el preset enviado. Abre **Rueda**, arrastra el indicador y pulsa **Cancelar**; vuelve a abrir, usa flechas del teclado, pulsa **Aplicar color** y repite en ventana estrecha, **Modo Día (Gris Suave)** y **Modo Cabina (Oscuro)**. Comprueba Escape y clic fuera.
+- **Resultado esperado:** el botón rápido envía el preset configurado a la selección, no un valor HEX directo. La rueda aparece por encima del contenido (React Portal), muestra HEX, HSV, preset más cercano y diferencia ΔE76 cuando hay aproximación. Arrastrar, teclas y Cancelar no envían; **Aplicar color** envía el preset mostrado. Escape/Cancelar devuelven el foco al botón **Rueda**; verifica el comportamiento al cerrar por clic fuera por separado. El panel no se corta al redimensionar.
+- **Criterio de aprobación:** comandos y grupos destino coinciden con la vista previa; la comparación CIE76 se presenta como aproximación, no como igualdad física de color; el panel sigue usable en ambos temas.
+- **Evidencia:** capturas con rueda abierta y ventana estrecha, Actividad antes/después de Cancelar y Aplicar, línea de comando y preset activo en onPC.
+- **Ante fallo:** pulsa **Cancelar** o Escape, registra color elegido, preset mostrado, tamaño de ventana y pasos; no repitas **Aplicar color** antes de revisar el destino.
 
-1. **Abrir:** Ajustes de Electron y grandMA2 con salidas físicas aisladas.
-2. **Configurar:** habilita `autoEjecutarVoz` solo para esta prueba con un grupo y nivel de ensayo. Asegura que el operador esté presente.
-3. **Pulsar:** graba una instrucción clara; después prueba ruido de fondo y una frase sin orden de luces. Vuelve a desactivar autoenvío al terminar.
-4. **Observar:** una orden clara y válida genera exactamente el payload de la vista previa; una salida ASR no interpretable no genera comando. Vigila si ruido o tonos se convierten en palabras: el diagnóstico automático produjo `¡Pero!` a partir de un tono, aunque el traductor la rechazó.
-5. **Pasa/falla:** pasa si no hay envíos por frases inválidas ni duplicados y el operador puede recuperar control. Falla si una transcripción errónea válida provoca un cambio no solicitado.
-6. **Guardar:** audio de prueba si la política del equipo lo permite, transcripción, Actividad, log de grandMA2 y hora; protege datos de voz personales.
-7. **Si hay error:** desactiva autoenvío, registra la frase reconocida y utiliza Confirmar con Enter hasta revisar la causa.
+## 4. Voz hablada en español con confirmación — RF-06
 
-## 5. Descarga inicial y operación sin internet — RNF-05
+- **Objetivo:** validar micrófono, transcripción real en español y envío solo tras Enter.
+- **Preparación:** micrófono y permisos de Windows listos; en **Ajustes → Conexión & Cabina**, deja desmarcada **Auto-ejecutar comandos dictados por voz (por seguridad en vivo se recomienda desactivado)**. Selecciona un grupo de ensayo y verifica que el modelo esté cargado o que haya internet para la primera carga.
+- **Pasos en Electron:** pulsa **Hablar** para empezar y de nuevo para detener; repite manteniéndolo presionado al menos 320 ms y soltando; prueba **Alt + Espacio** desde la ventana. Pronuncia una frase segura y conocida, por ejemplo «frontales al 50 por ciento» si «frontales» es un alias configurado. Pronuncia también una frase sin orden de iluminación. Revisa el texto y la vista previa antes de presionar Enter.
+- **Resultado esperado:** aparecen **Escuchando...**, medidor y **Transcribiendo...**; el texto reconocido queda en la orden. El progreso de modelo llega por `ma2:progreso-voz` durante la transcripción. No hay envío hasta Enter cuando autoejecución está desmarcada. Una frase no interpretable no genera payload ejecutable. Los textos de progreso dicen «Cargando…»; no prueban por sí solos si hubo descarga.
+- **Criterio de aprobación:** la frase española se reconoce de forma suficiente para producir exactamente el comando previsto y solo Enter lo envía; la frase inválida no llega a Telnet. Si el micrófono falla, registra FALLIDO para este caso aunque pase la prueba unitaria de ASR.
+- **Evidencia:** frase pronunciada y transcripción literal, capturas de los tres estados, vista previa, Actividad antes/después de Enter, comando de onPC y hora.
+- **Ante fallo:** revisa permiso, dispositivo y nivel de entrada en Windows; anota el mensaje y continúa por texto mientras se investiga.
 
-1. **Abrir:** una instalación de prueba o perfil nuevo de Electron, sin borrar la caché operativa del usuario; grandMA2 onPC en la misma laptop si se probarán comandos de loopback.
-2. **Configurar:** con internet, realiza una primera transcripción de prueba y comprueba que la caché `Xenova/whisper-tiny` contiene tokenizador y modelos ONNX. Después desconecta internet físicamente o deshabilita la interfaz externa, conservando la comunicación local necesaria.
-3. **Pulsar:** reinicia Electron; usa texto, niveles rápidos, un preset, la rueda, un cue de ensayo y Voz. Puedes repetir `node tests/verificarWhisperCacheOffline.cjs` como diagnóstico adicional.
-4. **Observar:** la UI y Poppins cargan; el modelo inicia desde caché sin descarga remota; las acciones locales siguen disponibles. Verifica por separado si la conexión Telnet local continúa.
-5. **Pasa/falla:** pasa solo si el flujo completo funciona sin internet externo en la laptop aislada. Falla si intenta obtener recursos indispensables de internet o si alguna acción queda bloqueada inesperadamente. El diagnóstico de caché por sí solo no concede aprobación integral.
-6. **Guardar:** capturas del estado de red, app, caché sin datos sensibles, resultado de voz y registro de comandos del showfile.
-7. **Si hay error:** reconecta internet solo para diagnóstico, anota recurso faltante y mensaje; no declares RNF-05 cumplido hasta repetir el ensayo offline.
+## 5. Voz con autoenvío controlado — RF-06
 
-## 6. Escenas y lenguaje natural — RF-07
+- **Objetivo:** comprobar el modo automático y la protección ante transcripciones erróneas.
+- **Preparación:** operador presente, showfile aislado, grupo y nivel seguros. Primero completa el caso 4. La auditoría del 20-11 observó que un tono sintético produjo `¡Pero!`, rechazado por el traductor; no garantiza rechazo de toda alucinación.
+- **Pasos en Electron:** marca **Auto-ejecutar comandos dictados por voz (por seguridad en vivo se recomienda desactivado)** y guarda; usa **Hablar** con una orden clara de ensayo; después prueba ruido de fondo y una frase sin orden. Desmarca y guarda la opción al terminar.
+- **Resultado esperado:** una transcripción válida despacha una vez el comando previsto; una salida no interpretable no envía. Actividad registra los intentos y los errores importantes aparecen en la cápsula inferior.
+- **Criterio de aprobación:** no hay envíos duplicados o por frases inválidas y el operador confirma el efecto esperado. Si una alucinación forma una orden válida inesperada, marca FALLIDO y suspende autoenvío.
+- **Evidencia:** transcripción literal, audio solo si se permite, Actividad, log de onPC, nivel antes/después y hora; protege datos personales de voz.
+- **Ante fallo:** desmarca autoejecución, guarda el texto reconocido y usa el modo de confirmación hasta corregir la causa.
 
-1. **Abrir:** grandMA2 onPC con un executor de ensayo que tenga al menos tres cues conocidos, y ClauCode Lights.
-2. **Configurar:** en Ajustes establece el número real de ese executor; no uses un executor del espectáculo activo.
-3. **Pulsar:** **Anterior**, **Siguiente**, escribe Cue `3` y pulsa **Ir**, luego **Off**. Repite por texto con «siguiente escena», «ir a escena 3» y «detener escena».
-4. **Observar:** Actividad muestra `GoBack Executor X`, `Go Executor X`, `Goto Cue 3 Executor X` y `Off Executor X`; grandMA2 confirma la transición esperada en el executor de ensayo. El número de cue inválido no debe enviarse.
-5. **Pasa/falla:** pasa si cada botón y frase afecta solo al executor configurado y al cue esperado. Falla si el comando llega a otro executor, se duplica o la app indica ejecución física sin respuesta real.
-6. **Guardar:** capturas de Actividad y vista de executor/cue de grandMA2 antes y después de cada paso, con hora.
-7. **Si hay error:** detén la secuencia de ensayo, confirma executor y cue configurados, guarda el comando textual exacto y avisa al operador.
+## 6. Primera descarga, caché y trabajo sin internet — RNF-05
 
-## 7. Ajustes, persistencia y reconexión — RNF-03
+- **Objetivo:** distinguir primera descarga de carga local y evaluar el flujo offline integral.
+- **Preparación:** utiliza un **perfil de Electron de ensayo** o una instalación de prueba; haz copia de la caché operativa y no la borres. La ruta del perfil bajo prueba debe corresponder a `app.getPath('userData')/cache-modelos-voz`. Prepara internet para la primera fase y grandMA2 onPC local con salidas aisladas para la segunda.
+- **Pasos en Electron:** con caché de ensayo vacía e internet activo, inicia una transcripción con **Hablar**; guarda mensajes de **Transcribiendo...**, progreso, actividad de red y contenido creado en `cache-modelos-voz` (modelo `Xenova/whisper-tiny`). Cierra Electron. Desconecta el acceso a internet externo sin interrumpir el enlace local con onPC; reinicia Electron y repite voz hablada, texto, niveles rápidos, colores, **Rueda** y una escena de ensayo. El diagnóstico opcional `node tests/verificarWhisperCacheOffline.cjs` puede usar una ruta explícita, pero su tono no reemplaza estas pruebas.
+- **Resultado esperado:** la primera fase obtiene y guarda los recursos que falten; la segunda los lee desde caché sin descarga remota, mientras la UI y los comandos locales continúan. El mensaje `Cargando recurso del modelo (...)` puede aparecer en ambas fases: distingue el origen con la red y la ruta, no con ese texto.
+- **Criterio de aprobación:** RNF-05 solo se aprueba si **todo** el flujo indicado funciona sin internet externo, incluida voz hablada y Telnet local. Una inferencia aislada con `allowRemoteModels=false` no basta.
+- **Evidencia:** fecha, versión, perfil usado, estado de red en ambas fases, mensajes IPC visibles, ruta y tamaño de caché sin secretos, transcripción, Actividad y respuesta del showfile.
+- **Ante fallo:** registra recurso o error faltante; recupera internet solo para diagnóstico. Mantén RNF-05 PENDIENTE MANUAL o FALLIDO según lo observado y repite el ensayo completo tras corregir.
 
-1. **Abrir:** Ajustes de Electron y copia de seguridad de `config.json` de usuario; prepara un segundo puerto o destino Telnet de ensayo autorizado.
-2. **Configurar:** modifica un nombre/sinónimo de grupo, un preset y su HEX, el tema, y después IP/puerto o cuenta de prueba. Evita credenciales operativas reales.
-3. **Pulsar:** **Guardar**, **Sincronizar**, cierra y reinicia Electron; vuelve a abrir Ajustes y prueba una orden con el nuevo sinónimo. Para la parte de red cambia al destino de ensayo.
-4. **Observar:** valores persistidos tras reiniciar, rueda y traductor actualizados, reconexión al nuevo destino, rechazo de HEX/preset/puerto inválido. Si se cambia solo tema o colores, observa si la conexión permanece estable.
-5. **Pasa/falla:** pasa si todo coincide con lo guardado y grandMA2 recibe solo órdenes destinadas al servidor de ensayo. Falla si se pierde configuración, se aceptan datos inválidos o se envía una orden antigua al nuevo destino.
-6. **Guardar:** capturas de Ajustes antes/después, archivo de configuración de prueba con contraseña cubierta, estado de conexión y logs del destino.
-7. **Si hay error:** restaura la copia de configuración, reinicia Electron, anota valores de entrada y mensaje exacto. No sobrescribas el archivo de producción.
+## 7. Escenas y lenguaje natural — RF-07
 
-## 8. Seguridad, selección, Deshacer y Blackout
+- **Objetivo:** verificar cues y executor configurado con acciones físicas observables en el showfile.
+- **Preparación:** executor de ensayo con al menos tres cues conocidos; anota número y estado inicial en onPC. Salidas físicas aisladas.
+- **Pasos en Electron:** establece **Executor por defecto (Cues)** en **Ajustes → Conexión & Cabina** y guarda. En **Escenas** pulsa **Anterior**, **Siguiente**, escribe `3` en **Escena** y pulsa **Ir**, luego **Detener**. Repite por texto «siguiente escena», «ir a escena 3» y «detener escena». Prueba un número de escena inválido sin forzar su envío.
+- **Resultado esperado:** Actividad registra `GoBack Executor X`, `Go Executor X`, `Goto Cue 3 Executor X` y `Off Executor X` según cada acción; onPC muestra la transición correspondiente. Un cue inválido se rechaza. **Escena** y **Detener** son los nombres visibles actuales.
+- **Criterio de aprobación:** cada orden afecta solo al executor de ensayo y al cue previsto, sin duplicados. La escritura Telnet no basta para aprobar el resultado físico.
+- **Evidencia:** capturas de Actividad y onPC antes/después de cada acción con hora, executor y cue.
+- **Ante fallo:** detén la secuencia de ensayo, conserva comando exacto y compara executor configurado con el showfile antes de repetir.
 
-1. **Abrir:** showfile de ensayo con salidas desconectadas, Electron y Actividad visibles.
-2. **Configurar:** grupos de ensayo con niveles y colores conocidos; operador presente. Verifica que no haya luminarias físicas conectadas.
-3. **Pulsar:** selecciona dos grupos con Ctrl+Clic y luego **Todos**; aplica nivel y preset, pulsa **Deshacer**. Intenta una orden inválida por texto. Pulsa **Blackout** una vez, espera más de 3,5 s y confirma que no actuó; solo en el showfile aislado, repite dos clics rápidos para probar confirmación.
-4. **Observar:** lotes corresponden a selección, Deshacer restaura estados representables, orden inválida no llega a Telnet, primer clic de Blackout solo arma confirmación y segundo dentro del plazo envía `Group 1 thru 6 At 0`. Comprueba que no hay duplicados por doble clic accidental.
-5. **Pasa/falla:** pasa si cada efecto y ausencia de efecto coincide con lo anterior. Falla si un solo clic apaga, si se envía una orden inválida o si Deshacer afecta grupos ajenos.
-6. **Guardar:** vídeo/capturas del primer clic sin comando, segundo clic en ensayo, Actividad y estado de grupos antes/después de Deshacer.
-7. **Si hay error:** detén pruebas de envío, conserva log y showfile de ensayo, e informa al responsable antes de repetir.
+## 8. Ajustes en caliente, persistencia y reconexión — RNF-03
 
-## 9. Pérdida de conexión y recuperación
+- **Objetivo:** verificar catálogo, tema y conexión actualizados sin reiniciar, y persistencia al reiniciar.
+- **Preparación:** copia de `app.getPath('userData')/config.json`, dos destinos/puertos Telnet de ensayo autorizados y alias de grupo de prueba.
+- **Pasos en Electron:** en **Ajustes**, modifica un alias en **Grupos (G1–G6)**, un preset y HEX válidos en **Colores (4.1–4.9)** y el tema en **Conexión & Cabina**; pulsa **Guardar** y prueba el alias, color rápido y rueda **antes de cerrar la app**. Reabre Ajustes para comprobar los valores. Después cambia host/puerto o credenciales de ensayo, guarda, observa el indicador, cierra y reinicia Electron. Prueba entradas inválidas de puerto, preset y HEX sin guardar un cambio válido accidental.
+- **Resultado esperado:** traductor, grupos, rueda y tema reflejan el catálogo nuevo en caliente; el cambio de red provoca reconexión automática al destino nuevo; la configuración válida persiste. Los valores inválidos muestran error y no se guardan. El icono **Reconectar consola** refresca estado/configuración, pero no fuerza directamente `conectar()`.
+- **Criterio de aprobación:** valores correctos antes/después de reiniciar y ninguna orden anterior entregada al nuevo destino. Un cambio solo visual no debería cortar la sesión Telnet.
+- **Evidencia:** capturas de Ajustes y ambos temas, comando con alias/preset nuevo, archivo de prueba con contraseña cubierta y logs de ambos destinos.
+- **Ante fallo:** restaura la copia de configuración, reinicia Electron y conserva valores ingresados, mensaje y hora; no sobrescribas el archivo operativo.
 
-1. **Abrir:** Electron y un servidor/instancia grandMA2 de ensayo; observa el indicador de conexión.
-2. **Configurar:** usa un puerto o enlace de prueba que pueda cerrarse sin afectar el espectáculo.
-3. **Pulsar:** cierra el servidor de ensayo mientras una orden está pendiente o antes de enviar otra; vuelve a levantarlo y pulsa **Sincronizar**. Repite cambiando a otro puerto de ensayo en Ajustes.
-4. **Observar:** estado de error/reconexión, mensaje de fallo y recuperación a autenticado. Un comando pendiente de la sesión caída o del puerto anterior no debe enviarse tardíamente al destino nuevo.
-5. **Pasa/falla:** pasa si el operador recibe un error claro, la interfaz deja de indicar envío exitoso y la nueva sesión no recibe órdenes obsoletas. Falla si aparece un cambio retrasado no solicitado.
-6. **Guardar:** capturas de estados, hora del corte/restablecimiento y logs Telnet de ambos destinos.
-7. **Si hay error:** desconecta el cliente, anota la secuencia temporal y no continúes con comandos de show hasta entender si quedan órdenes pendientes.
+## 9. Seguridad, selección, Deshacer y Blackout
+
+- **Objetivo:** comprobar protección de órdenes y restauración en un showfile seguro.
+- **Preparación:** **solo** showfile de ensayo, salidas físicas aisladas, operador presente, grupos con niveles y colores conocidos. Nunca uses Blackout en una función activa.
+- **Pasos en Electron:** selecciona dos grupos con Ctrl+Clic y luego **Todos**; aplica nivel y color, usa **Deshacer** y prueba una orden inválida por texto. Pulsa **Blackout** una vez, espera más de 3,5 s y comprueba que no se envió. Solo si la instalación sigue aislada, pulsa dos veces dentro de 3,5 s para confirmar; registra la cápsula crítica.
+- **Resultado esperado:** lotes afectan la selección, Deshacer restaura estados representables, la orden inválida no llega a Telnet y el primer clic de Blackout solo arma **¿Confirmar Blackout?**. Tras expirar el plazo no se envía; la segunda pulsación dentro del plazo envía `Group 1 thru N At 0`, donde N es el número de grupos configurados. Actividad registra la entrega y la cápsula avisa de Blackout.
+- **Criterio de aprobación:** ausencia de envío con un solo clic o tras el plazo, grupos destino correctos y respuesta del showfile sin órdenes duplicadas. La reversión física se juzga en onPC, no solo en tarjetas locales.
+- **Evidencia:** video de ambas secuencias, Actividad, aviso, comandos y estados de grupos antes/después en onPC, con hora.
+- **Ante fallo:** detén las pruebas, conserva logs y showfile, e informa al operador antes de cualquier repetición.
+
+## 10. Corte de conexión y recuperación
+
+- **Objetivo:** comprobar errores visibles, descarte de órdenes pendientes y regreso a una sesión autenticada.
+- **Preparación:** servidor o instancia de ensayo cuyo enlace pueda cortarse sin afectar otra operación; dos destinos de ensayo si se prueba cambio de puerto.
+- **Pasos en Electron:** con **Conectado** visible, corta el servidor de ensayo antes o durante un envío seguro; observa la cabecera, cápsula y Actividad. Restablece el servidor; observa el reintento automático y pulsa el icono **Reconectar consola** para refrescar la vista. Repite cambiando al segundo puerto desde **Ajustes** y comprueba ambos logs.
+- **Resultado esperado:** aparece **Sin conexión** o **Reconectando...**, el envío fallido se registra, y tras confirmar login vuelve **Conectado**. Una orden pendiente de la sesión anterior no llega tarde ni al nuevo destino. El icono por sí solo no garantiza un nuevo intento inmediato.
+- **Criterio de aprobación:** mensaje claro y sin cambios retrasados en el showfile ni órdenes obsoletas en el segundo servidor.
+- **Evidencia:** hora del corte/restablecimiento, capturas de estados y avisos, Actividad y logs de ambos destinos.
+- **Ante fallo:** no envíes más órdenes; registra la línea temporal y revisa la cola/sesión antes de reanudar.
 
 ## Cierre de aceptación
 
-Reúne capturas, comandos, resultados y fallos en la matriz. Entrega el expediente al Club de Arte y Cultura y solicita aprobación explícita de los Hitos 2 y 3. Una suite automatizada aprobada no sustituye esa aceptación.
+Anota fecha, versión, resultado y vínculo a la evidencia de cada caso en la matriz. Los casos sin ejecución siguen PENDIENTE MANUAL; marca NO EVALUADO cuando no hubo condiciones para ensayarlos. Entrega el expediente al Club de Arte y Cultura y solicita su aceptación explícita. Las suites automáticas y la existencia de código no sustituyen esa aceptación.
