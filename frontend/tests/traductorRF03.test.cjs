@@ -313,6 +313,14 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
     { accion: 'color', grupo: '2', valor: '4.2', tipo: 'color' },
   ]);
 
+  const mc3 = TraductorLuces.interpretarOrden('Frontales 100% y contras 0%');
+  assert.equal(mc3.exito, true);
+  assert.deepEqual(mc3.sintaxisListaMA2, ['Group 1 At 100', 'Group 2 At 0']);
+  assert.deepEqual(mc3.comandosPayload, [
+    { accion: 'ajustar', grupo: '1', valor: '100', tipo: 'intensidad' },
+    { accion: 'apagar', grupo: '2', valor: '0', tipo: 'intensidad' },
+  ]);
+
   // C. Rechazo atómico (todo o nada) cuando una cláusula falla o contiene inyección
   const rechazo1 = TraductorLuces.interpretarOrden('frontales al 50% y contras al 150%');
   assert.equal(rechazo1.exito, false);

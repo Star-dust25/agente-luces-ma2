@@ -958,8 +958,9 @@ input:focus-visible {
 }
 
 .chips-ejemplos .chip {
-  flex: 1 1 0;
-  min-width: 140px;
+  flex: 0 1 auto;
+  padding: 5px 11px;
+  font-size: 0.72rem;
 }
 
 .chips-sugerencias {
@@ -1468,53 +1469,161 @@ input:focus-visible {
   color: var(--gris-acero);
 }
 
-/* Toasts */
-.toasts {
+/* Micro-animación de entrada para el registro más reciente en Actividad */
+@keyframes destello-actividad-cabina {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px);
+    background-color: #282c37;
+    border-color: rgba(230, 30, 50, 0.58);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    background-color: var(--superficie-sutil);
+    border-color: #313643;
+  }
+}
+
+@keyframes destello-actividad-dia {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px);
+    background-color: rgba(230, 30, 50, 0.08);
+    border-color: rgba(230, 30, 50, 0.45);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    background-color: var(--superficie-sutil);
+    border-color: var(--cristal-borde);
+  }
+}
+
+.lienzo:not([data-tema='dia']) .item-actividad-reciente {
+  animation: destello-actividad-cabina 600ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.lienzo[data-tema='dia'] .item-actividad-reciente {
+  animation: destello-actividad-dia 600ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Único aviso crítico minimalista centrado inferior */
+@keyframes entrada-capsula {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.aviso-flotante-contenedor {
   position: fixed;
-  right: 20px;
-  bottom: 20px;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 90;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: min(320px, calc(100vw - 40px));
+  pointer-events: none;
+  max-width: min(92vw, 520px);
+  width: max-content;
 }
 
-.toast {
-  padding: 11px 14px;
-  display: flex;
+.aviso-capsula {
+  pointer-events: auto;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  background: var(--modal-bg);
+  min-height: 38px;
+  max-width: min(92vw, 520px);
+  padding: 8px 12px 8px 13px;
+  border-radius: 999px;
+  background: rgba(22, 24, 30, 0.86);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 12px 32px rgba(0, 0, 0, 0.55);
+  color: var(--blanco);
+  animation: entrada-capsula 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.toast-acento {
-  width: 4px;
-  height: 28px;
-  border-radius: 99px;
-  background: var(--carmesi);
+.lienzo[data-tema='dia'] .aviso-capsula {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+  color: #111827;
+}
+
+.aviso-punto {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
   flex: none;
 }
 
-.toast-texto {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
+.aviso-error .aviso-punto {
+  background: #e61e32;
+  box-shadow: 0 0 8px rgba(230, 30, 50, 0.65);
 }
 
-.toast-texto strong {
-  font-size: 0.78rem;
-  font-weight: 600;
+.aviso-advertencia .aviso-punto {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
 }
 
-.toast-texto span {
-  font-size: 0.73rem;
+.lienzo[data-tema='dia'] .aviso-advertencia .aviso-punto {
+  background: #92400e;
+  box-shadow: 0 0 6px rgba(146, 64, 14, 0.35);
+}
+
+.aviso-exito .aviso-punto,
+.aviso-info .aviso-punto {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+}
+
+.lienzo[data-tema='dia'] .aviso-exito .aviso-punto,
+.lienzo[data-tema='dia'] .aviso-info .aviso-punto {
+  background: #15803d;
+  box-shadow: 0 0 6px rgba(21, 128, 61, 0.35);
+}
+
+.aviso-mensaje {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+}
+
+.aviso-cerrar {
+  border: 0;
+  background: transparent;
   color: var(--gris-acero);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  opacity: 0.65;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.95rem;
+  line-height: 1;
+  flex: none;
+  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.aviso-cerrar:hover {
+  opacity: 1;
+  color: var(--blanco);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.lienzo[data-tema='dia'] .aviso-cerrar:hover {
+  background: rgba(15, 23, 42, 0.07);
 }
 
 /* Jerarquía de superficies para Modo Oscuro (Cabina) sin alterar Modo Día */
@@ -1569,8 +1678,7 @@ input:focus-visible {
 .rueda-panel:not([data-tema='dia']),
 .lienzo:not([data-tema='dia']) .popover-atajos,
 .lienzo:not([data-tema='dia']) .modal-caja,
-.lienzo:not([data-tema='dia']) .menu-contextual,
-.lienzo:not([data-tema='dia']) .toast {
+.lienzo:not([data-tema='dia']) .menu-contextual {
   background: var(--modal-bg);
   border-color: #323746;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65);

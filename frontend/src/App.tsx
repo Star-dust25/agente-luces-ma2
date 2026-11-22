@@ -39,16 +39,17 @@ interface RegistroLog {
   readonly hora: string;
   readonly nivel: NivelLog;
   readonly titulo: string;
+  readonly detalleEntrega?: string;
   readonly sintaxisMA2: string | null;
   readonly comandosPayload: readonly ComandoLuces[];
   readonly textoOriginal: string | null;
 }
 
-interface ToastItem {
+interface AvisoCritico {
   readonly id: string;
   readonly nivel: NivelLog;
-  readonly titulo: string;
-  readonly detalle: string;
+  readonly mensaje: string;
+  readonly duracionMs: number;
 }
 
 type MenuContextual =
@@ -59,6 +60,7 @@ interface OpcionesDespacho {
   readonly textoOriginal?: string | null;
   readonly colorOpcional?: DefinicionColorMA2;
   readonly registrarDeshacer?: boolean;
+  readonly esBlackout?: boolean;
 }
 
 const CONFIGURACION_POR_DEFECTO_UI: ConfiguracionSistemaMA2 = {
@@ -80,7 +82,7 @@ const CONFIGURACION_POR_DEFECTO_UI: ConfiguracionSistemaMA2 = {
 const EJEMPLOS_RAPIDOS = [
   'Frontales al 50%',
   'Contraluz en azul',
-  'Frontales 100% y contras apagadas',
+  'Frontales 100% y contras 0%',
 ] as const;
 
 const NIVELES_RAPIDOS = [0, 25, 50, 75, 100] as const;
@@ -239,7 +241,7 @@ export default function App() {
   const [cargando, setCargando] = useState<boolean>(true);
   const [enviando, setEnviando] = useState<boolean>(false);
   const [logs, setLogs] = useState<RegistroLog[]>([]);
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [avisoActivo, setAvisoActivo] = useState<AvisoCritico | null>(null);
   const [menu, setMenu] = useState<MenuContextual | null>(null);
   const [confirmandoBlackout, setConfirmandoBlackout] = useState<boolean>(false);
   const [pilaDeshacer, setPilaDeshacer] = useState<readonly PasoDeshacer[]>([]);
@@ -265,11 +267,15 @@ export default function App() {
   const estadoVozRef = useRef<EstadoVoz>(estadoVoz);
   estadoVozRef.current = estadoVoz;
 
-  const timersRef = useRef<Map<string, number>>(new Map());
+  const timerAvisoRef = useRef<number | null>(null);
+  const restanteAvisoMsRef = useRef<number>(0);
+  const inicioTimerAvisoRef = useRef<number>(0);
   const timerBlackoutRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const botonRuedaRef = useRef<HTMLButtonElement | null>(null);
   const atajosRef = useRef<HTMLDivElement | null>(null);
+  const sliderArrastrandoRef = useRef<boolean>(false);
+  const ultimoSliderConfirmadoRef = useRef<{ clave: string; valor: number; instante: number } | null>(null);
   const enviandoRef = useRef(false);
   const ultimoIntentoRef = useRef<{ clave: string; instante: number } | null>(null);
 
@@ -358,24 +364,53 @@ export default function App() {
     }
   }, []);
 
-  const lanzarToast = useCallback((nivel: NivelLog, titulo: string, detalle: string) => {
-    const id = crearId('toast');
-    setToasts((prev) => [...prev.slice(-2), { id, nivel, titulo, detalle }]);
-    const timer = window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-      timersRef.current.delete(id);
-    }, 3800);
-    timersRef.current.set(id, timer);
+  const cerrarAviso = useCallback(() => {
+    if (timerAvisoRef.current !== null) {
+      window.clearTimeout(timerAvisoRef.current);
+      timerAvisoRef.current = null;
+    }
+    restanteAvisoMsRef.current = 0;
+    setAvisoActivo(null);
   }, []);
 
-  const cerrarToast = useCallback((id: string) => {
-    const timer = timersRef.current.get(id);
-    if (timer !== undefined) {
-      window.clearTimeout(timer);
-      timersRef.current.delete(id);
+  const lanzarAviso = useCallback((nivel: NivelLog, mensaje: string) => {
+    if (timerAvisoRef.current !== null) {
+      window.clearTimeout(timerAvisoRef.current);
+      timerAvisoRef.current = null;
     }
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    const duracionMs = nivel === 'exito' || nivel === 'info' ? 2800 : 4500;
+    const id = crearId('aviso');
+    restanteAvisoMsRef.current = duracionMs;
+    inicioTimerAvisoRef.current = Date.now();
+    setAvisoActivo({ id, nivel, mensaje, duracionMs });
+    timerAvisoRef.current = window.setTimeout(() => {
+      timerAvisoRef.current = null;
+      setAvisoActivo((actual) => (actual?.id === id ? null : actual));
+    }, duracionMs);
   }, []);
+
+  const pausarAviso = useCallback(() => {
+    if (timerAvisoRef.current === null) {
+      return;
+    }
+    window.clearTimeout(timerAvisoRef.current);
+    timerAvisoRef.current = null;
+    const transcurrido = Date.now() - inicioTimerAvisoRef.current;
+    restanteAvisoMsRef.current = Math.max(400, restanteAvisoMsRef.current - transcurrido);
+  }, []);
+
+  const reanudarAviso = useCallback(() => {
+    if (avisoActivo === null || timerAvisoRef.current !== null) {
+      return;
+    }
+    const { id } = avisoActivo;
+    const restante = Math.max(400, restanteAvisoMsRef.current);
+    inicioTimerAvisoRef.current = Date.now();
+    timerAvisoRef.current = window.setTimeout(() => {
+      timerAvisoRef.current = null;
+      setAvisoActivo((actual) => (actual?.id === id ? null : actual));
+    }, restante);
+  }, [avisoActivo]);
 
   const registrarLog = useCallback((item: Omit<RegistroLog, 'id' | 'hora'>) => {
     setLogs((prev) => [{ ...item, id: crearId('log'), hora: horaActual() }, ...prev.slice(0, 29)]);
@@ -393,21 +428,22 @@ export default function App() {
           ]);
           setEstadoConexion(estado);
           aplicarConfiguracionEnMemoria(configPersistida);
-          if (notificar) {
-            lanzarToast('exito', 'Consola sincronizada', `Estado Telnet: ${estado}`);
+          if (notificar && (estado === 'ERROR' || estado === 'DESCONECTADO')) {
+            lanzarAviso('error', 'Sin conexión Telnet con GrandMA2');
           }
         } else {
           await new Promise<void>((r) => window.setTimeout(r, 320));
           setEstadoConexion('WEB');
-          if (notificar) {
-            lanzarToast('info', 'Modo Simulador Web', 'Ejecuta Electron para conexión TCP real.');
-          }
+        }
+      } catch {
+        if (notificar) {
+          lanzarAviso('error', 'No se pudo reconectar con la consola');
         }
       } finally {
         setCargando(false);
       }
     },
-    [aplicarConfiguracionEnMemoria, lanzarToast]
+    [aplicarConfiguracionEnMemoria, lanzarAviso]
   );
 
   useEffect(() => {
@@ -470,12 +506,10 @@ export default function App() {
   }, [atajosAbiertos]);
 
   useEffect(() => {
-    const timers = timersRef.current;
     return () => {
-      for (const timer of timers.values()) {
-        window.clearTimeout(timer);
+      if (timerAvisoRef.current !== null) {
+        window.clearTimeout(timerAvisoRef.current);
       }
-      timers.clear();
       if (timerBlackoutRef.current !== null) {
         window.clearTimeout(timerBlackoutRef.current);
       }
@@ -532,11 +566,16 @@ export default function App() {
       tituloLote: string,
       opciones: OpcionesDespacho = {}
     ): Promise<boolean> => {
-      const { textoOriginal = null, colorOpcional, registrarDeshacer = true } = opciones;
+      const {
+        textoOriginal = null,
+        colorOpcional,
+        registrarDeshacer = true,
+        esBlackout = false,
+      } = opciones;
 
       const bloqueo = bloqueoDeSeguridadCompuesto(comandos, textoOriginal);
       if (bloqueo !== null) {
-        lanzarToast('advertencia', 'Orden bloqueada', bloqueo);
+        lanzarAviso('advertencia', bloqueo);
         return false;
       }
 
@@ -582,14 +621,17 @@ export default function App() {
               respuesta = await window.api.enviarComandoLuces(payload);
             } catch (error) {
               falloEnvio = true;
+              const mensajeFallo =
+                error instanceof Error ? error.message : 'Fallo de comunicación Telnet';
               registrarLog({
                 nivel: 'error',
                 titulo: `Error · ${etiquetaPaso}`,
+                detalleEntrega: mensajeFallo,
                 sintaxisMA2: sintaxisEsperada,
                 comandosPayload: [payload],
                 textoOriginal,
               });
-              lanzarToast('error', 'No enviado a MA2', error instanceof Error ? error.message : String(error));
+              lanzarAviso('error', mensajeFallo);
               break;
             }
             setEstadoConexion(respuesta.estadoConexion);
@@ -601,20 +643,26 @@ export default function App() {
               registrarLog({
                 nivel: 'info',
                 titulo: etiquetaPaso,
+                detalleEntrega: 'Comando entregado a Telnet; ejecución física no confirmada.',
                 sintaxisMA2: comandoFinal,
                 comandosPayload: [payload],
                 textoOriginal,
               });
             } else {
               falloEnvio = true;
+              const mensajeFallo =
+                respuesta.estadoConexion === 'DESCONECTADO' || respuesta.estadoConexion === 'ERROR'
+                  ? 'Consola desconectada · orden no entregada'
+                  : respuesta.mensaje;
               registrarLog({
                 nivel: 'error',
                 titulo: `Error · ${etiquetaPaso}`,
+                detalleEntrega: respuesta.mensaje,
                 sintaxisMA2: comandoFinal,
                 comandosPayload: [payload],
                 textoOriginal,
               });
-              lanzarToast('error', 'No enviado a MA2', respuesta.mensaje);
+              lanzarAviso('error', mensajeFallo);
               break;
             }
           } else {
@@ -624,6 +672,7 @@ export default function App() {
             registrarLog({
               nivel: 'info',
               titulo: etiquetaPaso,
+              detalleEntrega: 'Simulación local sin conexión Telnet',
               sintaxisMA2: sintaxisEsperada,
               comandosPayload: [payload],
               textoOriginal,
@@ -648,13 +697,10 @@ export default function App() {
             );
           }
 
-          const resumen = sintaxisEnviadas.join(' · ');
           if (falloEnvio) {
-            lanzarToast('advertencia', 'Envío parcial', `${resumen} · Deshacer disponible para los grupos enviados.`);
-          } else if (window.api !== undefined) {
-            lanzarToast('info', `${tituloLote} · enviado a MA2`, `${resumen} · Sin confirmación física del resultado.`);
-          } else {
-            lanzarToast('info', `${tituloLote} (Web)`, resumen);
+            lanzarAviso('advertencia', 'Envío parcial · usa Deshacer si deseas revertir');
+          } else if (esBlackout) {
+            lanzarAviso('error', 'Blackout general enviado a consola');
           }
         }
 
@@ -664,7 +710,7 @@ export default function App() {
         setEnviando(false);
       }
     },
-    [actualizarEstadoGrupoLocal, lanzarToast, registrarLog]
+    [actualizarEstadoGrupoLocal, lanzarAviso, registrarLog]
   );
 
   const ejecutarOrdenDesdeTexto = useCallback(
@@ -672,7 +718,7 @@ export default function App() {
       const res = TraductorLuces.interpretarOrden(textoAProcesar);
       if (!res.exito || res.comandosPayload.length === 0) {
         const msg = res.mensajeError ?? 'No se pudo interpretar la instrucción.';
-        lanzarToast('advertencia', 'Orden incompleta', msg);
+        lanzarAviso('advertencia', msg);
         return;
       }
 
@@ -697,7 +743,7 @@ export default function App() {
         setSugerenciasOcultas(true);
       }
     },
-    [despacharLoteComandos, lanzarToast]
+    [despacharLoteComandos, lanzarAviso]
   );
 
   const procesarFormulario = useCallback(async () => {
@@ -726,16 +772,17 @@ export default function App() {
       setNivelVoz(0);
       setProgresoVoz(null);
       setErrorVozReciente(msg);
-      lanzarToast('error', 'Micrófono no disponible', msg);
+      lanzarAviso('error', msg);
       registrarLog({
         nivel: 'error',
         titulo: 'Error de micrófono',
+        detalleEntrega: msg,
         sintaxisMA2: null,
         comandosPayload: [],
         textoOriginal: null,
       });
     }
-  }, [lanzarToast, registrarLog]);
+  }, [lanzarAviso, registrarLog]);
 
   const detenerYTranscribirVoz = useCallback(async () => {
     if (estadoVozRef.current !== 'escuchando' || grabadoraRef.current === null) {
@@ -750,21 +797,18 @@ export default function App() {
 
       if (window.api === undefined) {
         setErrorVozReciente('Solo disponible en Electron');
-        lanzarToast(
-          'advertencia',
-          'Transcripción local requiere Electron',
-          'En navegador web usa entrada por texto; abre en Electron para usar el motor Whisper offline.'
-        );
+        lanzarAviso('advertencia', 'Dictado por voz disponible solo en Electron');
         return;
       }
 
       const resultado = await window.api.transcribirAudio(muestras16k);
       if (!resultado.exito || resultado.texto.trim().length === 0) {
         setErrorVozReciente(resultado.mensaje);
-        lanzarToast('advertencia', 'Sin transcripción válida', resultado.mensaje);
+        lanzarAviso('advertencia', resultado.mensaje);
         registrarLog({
           nivel: 'advertencia',
           titulo: 'Voz no procesada',
+          detalleEntrega: resultado.mensaje,
           sintaxisMA2: null,
           comandosPayload: [],
           textoOriginal: null,
@@ -780,23 +824,17 @@ export default function App() {
 
       if (configuracionRef.current.interfaz.autoEjecutarVoz) {
         await ejecutarOrdenDesdeTexto(textoTranscrito);
-      } else {
-        lanzarToast(
-          'info',
-          `Voz transcrita (${resultado.duracionMs} ms)`,
-          `"${textoTranscrito}" — Revisa y presiona Enter para ejecutar.`
-        );
       }
     } catch (error: unknown) {
       const detalle = error instanceof Error ? error.message : String(error);
       setErrorVozReciente(detalle);
-      lanzarToast('error', 'Error al transcribir audio', detalle);
+      lanzarAviso('error', detalle);
     } finally {
       setEstadoVoz('inactivo');
       setNivelVoz(0);
       setProgresoVoz(null);
     }
-  }, [ejecutarOrdenDesdeTexto, lanzarToast, registrarLog]);
+  }, [ejecutarOrdenDesdeTexto, lanzarAviso, registrarLog]);
 
   const manejarPointerDownMic = () => {
     if (estadoVoz === 'transcribiendo') {
@@ -918,7 +956,7 @@ export default function App() {
   }, [detenerYTranscribirVoz, iniciarGrabacionVoz, modalAjustesAbierto, seleccionarGrupos]);
 
   const accionRapidaGrupo = useCallback(
-    async (idGrupo: string, porcentaje: number) => {
+    async (idGrupo: string, porcentaje: number, esBlackout = false) => {
       const g = grupos[idGrupo];
       const nombre = g?.nombre ?? `Grupo ${idGrupo}`;
       const accion = porcentaje === 0 ? 'apagar' : porcentaje === 100 ? 'encender' : 'ajustar';
@@ -933,8 +971,11 @@ export default function App() {
 
       await despacharLoteComandos(
         [{ accion, grupo: idGrupo, valor: String(porcentaje), tipo: 'intensidad' }],
-        `${nombre} al ${porcentaje}%`,
-        { textoOriginal: `${nombre} al ${porcentaje}%` }
+        esBlackout ? 'Blackout general' : `${nombre} al ${porcentaje}%`,
+        {
+          textoOriginal: `${nombre} al ${porcentaje}%`,
+          esBlackout,
+        }
       );
     },
     [catalogoGruposActual.length, despacharLoteComandos, grupos, gruposSeleccionados]
@@ -953,6 +994,29 @@ export default function App() {
       });
     },
     [catalogoGruposActual.length, despacharLoteComandos, gruposSeleccionados, resumenSeleccion.titulo]
+  );
+
+  const confirmarValorSlider = useCallback(
+    (nuevoValor: number) => {
+      const claveSeleccion = gruposSeleccionados.join(',');
+      const ahora = Date.now();
+      const ultimo = ultimoSliderConfirmadoRef.current;
+      if (
+        ultimo !== null &&
+        ultimo.clave === claveSeleccion &&
+        ultimo.valor === nuevoValor &&
+        ahora - ultimo.instante < 280
+      ) {
+        return;
+      }
+      ultimoSliderConfirmadoRef.current = {
+        clave: claveSeleccion,
+        valor: nuevoValor,
+        instante: ahora,
+      };
+      void aplicarIntensidadSeleccion(nuevoValor);
+    },
+    [aplicarIntensidadSeleccion, gruposSeleccionados]
   );
 
   const aplicarColorSeleccion = useCallback(
@@ -1055,38 +1119,33 @@ export default function App() {
         if (window.api !== undefined) {
           const respuesta = await window.api.guardarConfiguracion(nuevaConfig);
           if (!respuesta.exito) {
-            lanzarToast('error', 'No se pudo guardar config.json', respuesta.mensaje);
+            lanzarAviso('error', respuesta.mensaje);
             return;
           }
           aplicarConfiguracionEnMemoria(respuesta.configuracion);
           setModalAjustesAbierto(false);
-          lanzarToast('exito', 'Ajustes guardados', respuesta.mensaje);
+          lanzarAviso('exito', 'Ajustes guardados');
         } else {
           aplicarConfiguracionEnMemoria(nuevaConfig);
           setModalAjustesAbierto(false);
-          lanzarToast(
-            'info',
-            'Ajustes aplicados en vista web',
-            'En Electron se persisten en config.json y reconectan Telnet.'
-          );
+          lanzarAviso('info', 'Ajustes aplicados en vista web');
         }
       } finally {
         setGuardandoAjustes(false);
       }
     },
-    [aplicarConfiguracionEnMemoria, lanzarToast]
+    [aplicarConfiguracionEnMemoria, lanzarAviso]
   );
 
   const copiarTexto = useCallback(
     async (texto: string) => {
       try {
         await navigator.clipboard.writeText(texto);
-        lanzarToast('exito', 'Copiado al portapapeles', texto);
       } catch {
-        lanzarToast('advertencia', 'No se pudo copiar', texto);
+        lanzarAviso('advertencia', 'No se pudo copiar al portapapeles');
       }
     },
-    [lanzarToast]
+    [lanzarAviso]
   );
 
   const abrirMenuGrupo = (e: ReactMouseEvent<HTMLElement>, idGrupo: string) => {
@@ -1163,11 +1222,7 @@ export default function App() {
         timerBlackoutRef.current = null;
         setConfirmandoBlackout(false);
       }, 3500);
-      lanzarToast(
-        'advertencia',
-        'Confirmar Blackout',
-        `Haz clic nuevamente para apagar todos los grupos (1 al ${catalogoGruposActual.length}).`
-      );
+      lanzarAviso('advertencia', 'Pulsa Blackout otra vez para apagar todo');
       return;
     }
 
@@ -1176,8 +1231,8 @@ export default function App() {
       timerBlackoutRef.current = null;
     }
     setConfirmandoBlackout(false);
-    void accionRapidaGrupo(`1 thru ${catalogoGruposActual.length}`, 0);
-  }, [accionRapidaGrupo, catalogoGruposActual.length, confirmandoBlackout, lanzarToast]);
+    void accionRapidaGrupo(`1 thru ${catalogoGruposActual.length}`, 0, true);
+  }, [accionRapidaGrupo, catalogoGruposActual.length, confirmandoBlackout, lanzarAviso]);
 
   const grupoEnMenu = menu?.tipo === 'grupo' ? grupos[menu.idGrupo] : undefined;
   const logEnMenu =
@@ -1396,11 +1451,38 @@ export default function App() {
               step={1}
               value={valorSlider}
               aria-label={`Intensidad de ${resumenSeleccion.titulo}`}
+              onPointerDown={(e) => {
+                sliderArrastrandoRef.current = true;
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
               onChange={(e) => setValorSlider(Number(e.target.value))}
-              onPointerUp={() => void aplicarIntensidadSeleccion(valorSlider)}
+              onPointerUp={(e) => {
+                if (!sliderArrastrandoRef.current) {
+                  return;
+                }
+                sliderArrastrandoRef.current = false;
+                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                  e.currentTarget.releasePointerCapture(e.pointerId);
+                }
+                const valorFinal = Number(e.currentTarget.value);
+                setValorSlider(valorFinal);
+                confirmarValorSlider(valorFinal);
+              }}
+              onPointerCancel={(e) => {
+                if (!sliderArrastrandoRef.current) {
+                  return;
+                }
+                sliderArrastrandoRef.current = false;
+                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                  e.currentTarget.releasePointerCapture(e.pointerId);
+                }
+                const valorFinal = Number(e.currentTarget.value);
+                setValorSlider(valorFinal);
+                confirmarValorSlider(valorFinal);
+              }}
               onKeyUp={(e) => {
                 if (TECLAS_SLIDER_CONFIRMACION.has(e.key)) {
-                  void aplicarIntensidadSeleccion(valorSlider);
+                  confirmarValorSlider(Number(e.currentTarget.value));
                 }
               }}
             />
@@ -1778,34 +1860,39 @@ export default function App() {
               ) : logs.length === 0 ? (
                 <p className="vacio">Sin actividad reciente</p>
               ) : (
-                logs.map((log) => (
-                  <div
-                    key={log.id}
-                    className="item-actividad"
-                    onContextMenu={(e) => abrirMenuLog(e, log.id)}
-                  >
-                    <div className="item-izquierda">
-                      <span className="hora">{log.hora}</span>
-                      <span className="item-titulo" title={log.titulo}>
-                        {log.titulo}
-                      </span>
-                    </div>
+                logs.map((log, indice) => {
+                  const tooltipFila =
+                    log.detalleEntrega !== undefined
+                      ? `${log.titulo} — ${log.detalleEntrega}`
+                      : log.titulo;
+                  return (
+                    <div
+                      key={log.id}
+                      className={`item-actividad${indice === 0 ? ' item-actividad-reciente' : ''}`}
+                      title={tooltipFila}
+                      onContextMenu={(e) => abrirMenuLog(e, log.id)}
+                    >
+                      <div className="item-izquierda">
+                        <span className="hora">{log.hora}</span>
+                        <span className="item-titulo">{log.titulo}</span>
+                      </div>
 
-                    <div className="item-derecha">
-                      {log.sintaxisMA2 !== null && (
-                        <code className="codigo-pill">{log.sintaxisMA2}</code>
-                      )}
-                      <button
-                        type="button"
-                        className="btn-icono"
-                        aria-label="Opciones de evento"
-                        onClick={(e) => abrirMenuLog(e, log.id)}
-                      >
-                        ⋮
-                      </button>
+                      <div className="item-derecha">
+                        {log.sintaxisMA2 !== null && (
+                          <code className="codigo-pill">{log.sintaxisMA2}</code>
+                        )}
+                        <button
+                          type="button"
+                          className="btn-icono"
+                          aria-label="Opciones de evento"
+                          onClick={(e) => abrirMenuLog(e, log.id)}
+                        >
+                          ⋮
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </section>
@@ -1960,26 +2047,29 @@ export default function App() {
         </div>
       )}
 
-      {/* Toasts minimalistas */}
-      <aside className="toasts" aria-live="polite">
-        {toasts.map((t) => (
-          <div key={t.id} className="toast glass" role="status">
-            <span className="toast-acento" />
-            <div className="toast-texto">
-              <strong>{t.titulo}</strong>
-              <span>{t.detalle}</span>
-            </div>
+      {/* Único aviso crítico minimalista en cápsula flotante */}
+      {avisoActivo !== null && (
+        <aside className="aviso-flotante-contenedor" aria-live="polite">
+          <div
+            key={avisoActivo.id}
+            className={`aviso-capsula aviso-${avisoActivo.nivel}`}
+            role={avisoActivo.nivel === 'error' ? 'alert' : 'status'}
+            onMouseEnter={pausarAviso}
+            onMouseLeave={reanudarAviso}
+          >
+            <span className="aviso-punto" aria-hidden="true" />
+            <span className="aviso-mensaje">{avisoActivo.mensaje}</span>
             <button
               type="button"
-              className="btn-icono"
-              aria-label="Cerrar"
-              onClick={() => cerrarToast(t.id)}
+              className="aviso-cerrar"
+              aria-label="Cerrar aviso"
+              onClick={cerrarAviso}
             >
               ×
             </button>
           </div>
-        ))}
-      </aside>
+        </aside>
+      )}
     </div>
   );
 }
