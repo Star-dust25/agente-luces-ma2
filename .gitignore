@@ -1,3 +1,6 @@
 node_modules/
 dist/
+frontend/dist/
+release/
+*.exe
 .cache-modelos-voz/

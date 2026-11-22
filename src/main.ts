@@ -110,7 +110,7 @@ class ControladorPrincipalMA2 {
       width: 1240,
       height: 820,
       show: true,
-      title: 'Agente de Control de Luces - GrandMA2',
+      title: 'ClauCode Lights',
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,

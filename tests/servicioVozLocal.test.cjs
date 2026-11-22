@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const Module = require('node:module');
 const os = require('node:os');
 const path = require('node:path');
 const {
@@ -7,6 +9,7 @@ const {
   normalizarAudioPCM,
   limpiarTextoTranscrito,
   convertirAudioAFloat32,
+  archivosCacheVozLegibles,
 } = require('../dist/servicios/ServicioVozLocal.js');
 
 console.log('Iniciando pruebas unitarias de ServicioVozLocal (RF-06):');
@@ -17,6 +20,216 @@ function generarTonoVoz(longitud = 8000, amplitud = 0.2) {
     muestras[i] = amplitud * Math.sin((2 * Math.PI * 440 * i) / 16000);
   }
   return muestras;
+}
+
+async function conTransformersSimulado(modulo, accion) {
+  const cargarOriginal = Module._load;
+  Module._load = function (solicitud) {
+    if (solicitud === '@huggingface/transformers') return modulo;
+    return cargarOriginal.apply(this, arguments);
+  };
+  try {
+    return await accion();
+  } finally {
+    Module._load = cargarOriginal;
+  }
+}
+
+function crearTransformersSimulado(estado, remotoEsperado, fallar = false) {
+  const env = {
+    cacheDir: 'cache-anterior', allowLocalModels: false,
+    allowRemoteModels: true, useFSCache: false,
+  };
+  const llamadas = { registro: 0, pipeline: 0, inferencia: 0 };
+  return {
+    env, llamadas,
+    ModelRegistry: {
+      async is_pipeline_cached_files(tarea, modelo, opciones) {
+        llamadas.registro += 1;
+        assert.equal(tarea, 'automatic-speech-recognition');
+        assert.equal(modelo, 'Xenova/whisper-tiny');
+        assert.equal(opciones.dtype, 'q8');
+        assert.equal(env.allowRemoteModels, false, 'La inspección no debe consultar la red');
+        return estado;
+      },
+    },
+    async pipeline(tarea, modelo, opciones) {
+      llamadas.pipeline += 1;
+      assert.equal(tarea, 'automatic-speech-recognition');
+      assert.equal(modelo, 'Xenova/whisper-tiny');
+      assert.equal(opciones.dtype, 'q8');
+      assert.equal(env.allowRemoteModels, remotoEsperado);
+      assert.equal(opciones.local_files_only, !remotoEsperado);
+      if (fallar) throw new Error(remotoEsperado ? 'ENOTFOUND huggingface.co' : 'local_files_only=true');
+      opciones.progress_callback({ status: 'ready' });
+      return async (_audio, opcionesASR) => {
+        llamadas.inferencia += 1;
+        assert.deepEqual(opcionesASR, { language: 'spanish', task: 'transcribe' });
+        return { text: 'Frontales al 50%' };
+      };
+    },
+  };
+}
+
+async function probarCacheYModoOffline(tono) {
+  const temporal = await fs.mkdtemp(path.join(os.tmpdir(), 'ma2-voz-cache-'));
+  const modelo = path.join(temporal, 'Xenova', 'whisper-tiny');
+  try {
+    await fs.mkdir(modelo, { recursive: true });
+    await fs.writeFile(path.join(modelo, 'config.json'), JSON.stringify({ model_type: 'whisper', is_encoder_decoder: true }));
+    await fs.writeFile(path.join(modelo, 'tokenizer_config.json'), '{}');
+    await fs.writeFile(path.join(modelo, 'preprocessor_config.json'), '{}');
+
+    // El registro real de la versión instalada determina los recursos q8 del fixture.
+    const real = require('@huggingface/transformers');
+    const anterior = {
+      cacheDir: real.env.cacheDir,
+      allowRemoteModels: real.env.allowRemoteModels,
+      allowLocalModels: real.env.allowLocalModels,
+      useFSCache: real.env.useFSCache,
+      fetch: real.env.fetch,
+    };
+    let consultasRemotas = 0;
+    let archivos;
+    try {
+      real.env.cacheDir = temporal;
+      real.env.allowRemoteModels = false;
+      real.env.allowLocalModels = true;
+      real.env.useFSCache = true;
+      real.env.fetch = async () => { consultasRemotas += 1; throw new Error('Red prohibida en fixture'); };
+      const estado = await real.ModelRegistry.is_pipeline_cached_files(
+        'automatic-speech-recognition', 'Xenova/whisper-tiny', { cache_dir: temporal, dtype: 'q8' }
+      );
+      archivos = estado.files.map(({ file }) => file);
+      assert.equal(estado.allCached, false);
+      assert.ok(archivos.some((archivo) => archivo.endsWith('.onnx')));
+      assert.ok(archivos.includes('tokenizer.json'));
+      assert.ok(archivos.includes('preprocessor_config.json'));
+      assert.equal(consultasRemotas, 0);
+    } finally {
+      Object.assign(real.env, anterior);
+    }
+
+    for (const archivo of archivos) {
+      const destino = path.join(modelo, ...archivo.split('/'));
+      await fs.mkdir(path.dirname(destino), { recursive: true });
+      if (archivo.endsWith('.onnx')) await fs.writeFile(destino, Buffer.from([8, 1]));
+      else if (!(await fs.stat(destino).then(() => true, () => false))) await fs.writeFile(destino, '{}');
+    }
+    const estadosCompletos = archivos.map((file) => ({ file, cached: true }));
+    assert.equal(await archivosCacheVozLegibles(temporal, estadosCompletos), true);
+    assert.equal(await archivosCacheVozLegibles(path.join(temporal, 'inexistente'), estadosCompletos), false);
+
+    const onnx = archivos.find((archivo) => archivo.endsWith('.onnx'));
+    const rutaOnnx = path.join(modelo, ...onnx.split('/'));
+    await fs.writeFile(rutaOnnx, Buffer.alloc(0));
+    assert.equal(await archivosCacheVozLegibles(temporal, estadosCompletos), false, 'ONNX vacío');
+    await fs.writeFile(rutaOnnx, Buffer.from([8, 1]));
+    await fs.unlink(rutaOnnx);
+    assert.equal(await archivosCacheVozLegibles(temporal, estadosCompletos), false, 'ONNX ausente');
+    await fs.writeFile(rutaOnnx, Buffer.from([8, 1]));
+
+    const rutaTokenizador = path.join(modelo, 'tokenizer.json');
+    await fs.writeFile(rutaTokenizador, '{');
+    assert.equal(await archivosCacheVozLegibles(temporal, estadosCompletos), false, 'JSON truncado');
+    await fs.writeFile(rutaTokenizador, '{}');
+
+    const abrirOriginal = fs.open;
+    fs.open = async function (ruta, ...args) {
+      if (ruta === rutaTokenizador) throw Object.assign(new Error('Acceso denegado'), { code: 'EACCES' });
+      return abrirOriginal.call(this, ruta, ...args);
+    };
+    try {
+      assert.equal(await archivosCacheVozLegibles(temporal, estadosCompletos), false, 'Archivo ilegible');
+    } finally {
+      fs.open = abrirOriginal;
+    }
+
+    const estadoCompleto = { allCached: true, files: estadosCompletos };
+    const progreso = [];
+    const completo = crearTransformersSimulado(estadoCompleto, false);
+    await conTransformersSimulado(completo, async () => {
+      const servicio = new ServicioVozLocal(temporal, null, (mensaje) => progreso.push(mensaje));
+      assert.equal((await servicio.transcribirAudioPCM(tono)).exito, true);
+      assert.equal((await servicio.transcribirAudioPCM(tono)).exito, true);
+    });
+    assert.equal(completo.llamadas.registro, 1);
+    assert.equal(completo.llamadas.pipeline, 1, 'Pipeline reutilizado en carga repetida');
+    assert.equal(completo.llamadas.inferencia, 2);
+    assert.ok(progreso.some((mensaje) => mensaje.includes('Cargando modelo local desde caché')));
+    assert.deepEqual(completo.env, {
+      cacheDir: 'cache-anterior', allowLocalModels: false,
+      allowRemoteModels: true, useFSCache: false,
+    }, 'El entorno global se restaura');
+
+    await fs.unlink(rutaOnnx);
+    const incompleto = crearTransformersSimulado(estadoCompleto, true);
+    await conTransformersSimulado(incompleto, async () => {
+      const resultado = await new ServicioVozLocal(temporal).transcribirAudioPCM(tono);
+      assert.equal(resultado.exito, true, 'Permite primera descarga simulada');
+    });
+    await fs.writeFile(rutaOnnx, Buffer.from([8, 1]));
+
+    const inexistente = crearTransformersSimulado(estadoCompleto, true);
+    await conTransformersSimulado(inexistente, async () => {
+      const resultado = await new ServicioVozLocal(path.join(temporal, 'no-existe')).transcribirAudioPCM(tono);
+      assert.equal(resultado.exito, true, 'Permite primera descarga sin caché');
+    });
+    assert.equal(inexistente.llamadas.registro, 0, 'Sin metadatos no se consulta el registro');
+
+    const sinRed = crearTransformersSimulado({ allCached: false, files: estadosCompletos }, false, true);
+    sinRed.env.allowRemoteModels = false;
+    await conTransformersSimulado(sinRed, async () => {
+      const resultado = await new ServicioVozLocal(temporal).transcribirAudioPCM(tono);
+      assert.equal(resultado.exito, false);
+      assert.equal(resultado.estadoModelo, 'ERROR');
+      assert.match(resultado.mensaje, /Faltan recursos|internet/i);
+    });
+    assert.equal(sinRed.env.allowRemoteModels, false);
+
+    const errorDescarga = crearTransformersSimulado({ allCached: false, files: estadosCompletos }, true, true);
+    await conTransformersSimulado(errorDescarga, async () => {
+      const servicio = new ServicioVozLocal(temporal);
+      assert.equal((await servicio.transcribirAudioPCM(tono)).estadoModelo, 'ERROR');
+      assert.equal((await servicio.transcribirAudioPCM(tono)).estadoModelo, 'ERROR');
+    });
+    assert.equal(errorDescarga.llamadas.pipeline, 2, 'Reintenta después de un fallo');
+
+    const entornoCompartido = {
+      cacheDir: 'original', allowLocalModels: false,
+      allowRemoteModels: true, useFSCache: false,
+    };
+    const politicasObservadas = [];
+    const simultaneo = {
+      env: entornoCompartido,
+      ModelRegistry: { async is_pipeline_cached_files() { return estadoCompleto; } },
+      async pipeline(_tarea, _modelo, opciones) {
+        const politica = entornoCompartido.allowRemoteModels;
+        politicasObservadas.push(politica);
+        await new Promise((resolver) => setTimeout(resolver, 5));
+        assert.equal(entornoCompartido.allowRemoteModels, politica, 'Otra instancia no debe alterar env durante la carga');
+        assert.equal(opciones.local_files_only, !politica);
+        return async () => ({ text: 'Frontales al 50%' });
+      },
+    };
+    await conTransformersSimulado(simultaneo, async () => {
+      const resultados = await Promise.all([
+        new ServicioVozLocal(temporal).transcribirAudioPCM(tono),
+        new ServicioVozLocal(path.join(temporal, 'sin-cache')).transcribirAudioPCM(tono),
+      ]);
+      assert.ok(resultados.every((resultado) => resultado.exito));
+    });
+    assert.deepEqual(politicasObservadas, [false, true]);
+    assert.deepEqual(entornoCompartido, {
+      cacheDir: 'original', allowLocalModels: false,
+      allowRemoteModels: true, useFSCache: false,
+    });
+  } finally {
+    // Nunca borrar una ruta calculada fuera del directorio temporal recién creado.
+    if (path.resolve(temporal).startsWith(path.resolve(os.tmpdir()) + path.sep)) {
+      await fs.rm(temporal, { recursive: true, force: true });
+    }
+  }
 }
 
 async function ejecutarPruebas() {
@@ -84,6 +297,9 @@ async function ejecutarPruebas() {
   assert.equal(resError.exito, false);
   assert.equal(resError.estadoModelo, 'ERROR');
   assert.match(resError.mensaje, /caché|internet|texto/i);
+
+  // 7. Inspección local, política offline automática y errores con cachés aisladas
+  await probarCacheYModoOffline(tono);
 
   console.log('Todos los casos de ServicioVozLocal (RF-06) pasaron exitosamente.');
 }

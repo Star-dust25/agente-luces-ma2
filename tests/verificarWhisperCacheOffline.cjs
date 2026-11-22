@@ -1,5 +1,5 @@
 // Diagnóstico opcional: requiere que el modelo ya exista en la caché local (userData o respaldo).
-// Deshabilita cualquier descarga remota; un tono no demuestra reconocimiento de voz real.
+// Verifica la política automática y bloquea cualquier fetch real; un tono no demuestra habla real.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -25,17 +25,29 @@ async function verificar() {
   const rutaCache = resolverRutaCache();
   assert.ok(fs.existsSync(rutaCache), `Falta la caché local del modelo en "${rutaCache}".`);
   const transformadores = await import('@huggingface/transformers');
-  transformadores.env.cacheDir = rutaCache;
-  transformadores.env.allowLocalModels = true;
-  transformadores.env.allowRemoteModels = false;
-  transformadores.env.useFSCache = true;
+  const fetchAnterior = transformadores.env.fetch;
+  const remotoAnterior = transformadores.env.allowRemoteModels;
+  let consultasRemotas = 0;
+  // Partir con remoto permitido comprueba que el servicio lo prohíbe por sí mismo
+  // cuando descubre la caché completa. La trampa impide una solicitud real si falla.
+  transformadores.env.allowRemoteModels = true;
+  transformadores.env.fetch = async () => {
+    consultasRemotas += 1;
+    throw new Error('Solicitud remota bloqueada durante diagnóstico offline');
+  };
 
-  const tono = Float32Array.from({ length: 8000 }, (_, i) =>
-    0.15 * Math.sin(2 * Math.PI * 440 * i / 16000)
-  );
-  const resultado = await new ServicioVozLocal(rutaCache).transcribirAudioPCM(tono);
-  assert.equal(resultado.estadoModelo, 'LISTO', resultado.mensaje);
-  console.log(`WHISPER_LOCAL_LISTO duración=${resultado.duracionMs}ms texto=${JSON.stringify(resultado.texto)}`);
+  try {
+    const tono = Float32Array.from({ length: 8000 }, (_, i) =>
+      0.15 * Math.sin(2 * Math.PI * 440 * i / 16000)
+    );
+    const resultado = await new ServicioVozLocal(rutaCache).transcribirAudioPCM(tono);
+    assert.equal(resultado.estadoModelo, 'LISTO', resultado.mensaje);
+    assert.equal(consultasRemotas, 0, 'No debe haber consultas HTTP con caché completa.');
+    console.log(`WHISPER_LOCAL_LISTO duración=${resultado.duracionMs}ms texto=${JSON.stringify(resultado.texto)} consultasRemotas=${consultasRemotas}`);
+  } finally {
+    transformadores.env.fetch = fetchAnterior;
+    transformadores.env.allowRemoteModels = remotoAnterior;
+  }
 }
 
 verificar().catch((error) => { console.error(error); process.exitCode = 1; });

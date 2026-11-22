@@ -141,4 +141,16 @@ Las pruebas automáticas verifican la ruta de procesamiento con un transcriptor 
 
 [VALIDACION_HITOS_2_Y_3.md](VALIDACION_HITOS_2_Y_3.md) registra fechas, resultados y alcance de las pruebas. [GUIA_PRUEBAS_MANUALES_HITOS_2_Y_3.md](GUIA_PRUEBAS_MANUALES_HITOS_2_Y_3.md) indica cómo verificar Electron, voz española, red desconectada y grandMA2 onPC. Las suites unitarias y el servidor Telnet simulado **no sustituyen las pruebas físicas ni la aceptación del Club de Arte y Cultura**.
 
-El empaquetado para Windows corresponde al siguiente bloque de trabajo. **`dist:win` aún no existe en `package.json` y está pendiente de implementación; no hay un instalador Windows validado en este repositorio.**
+### Empaquetado Windows RNF-08
+
+Para compilar el instalador de escritorio para Windows x64:
+
+```powershell
+npm.cmd run dist:win
+```
+
+El script compila primero el backend y el frontend, y después genera un instalador NSIS con electron-builder. El nombre visible es **ClauCode Lights** y la versión proviene de `package.json`. El instalador se escribe en `release/` y la configuración persistente se crea dentro de `app.getPath('userData')`, sin escribir dentro del paquete.
+
+La plantilla `config.json`, `dist/`, `frontend/dist/` y las dependencias de producción necesarias quedan dentro del paquete. Los binarios nativos de `onnxruntime-node` están configurados con `asarUnpack` para que puedan cargarse desde el sistema de archivos.
+
+La validación técnica real del resultado se registra en [VALIDACION_EMPAQUETADO_RNF08.md](VALIDACION_EMPAQUETADO_RNF08.md).

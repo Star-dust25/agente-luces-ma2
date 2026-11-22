@@ -8,10 +8,19 @@
     "watch": "tsc -w",
     "start": "npm run build && electron .",
     "start:all": "npm --prefix frontend run build && npm run build && electron .",
+    "dist:win": "npm run build && npm --prefix frontend run build && electron-builder --win nsis:x64",
     "test": "npm run build && node tests/constructorComandosMA2.test.cjs && node tests/gestorConfiguracion.test.cjs && node tests/servicioVozLocal.test.cjs && node tests/clienteTelnetMA2.test.cjs && npm --prefix frontend test",
     "test:latencia": "npm run build && node tests/latenciaRNF06.test.cjs"
   },
-  "keywords": ["electron", "react", "typescript", "grandma2", "telnet", "whisper", "iluminacion"],
+  "keywords": [
+    "electron",
+    "react",
+    "typescript",
+    "grandma2",
+    "telnet",
+    "whisper",
+    "iluminacion"
+  ],
   "type": "commonjs",
   "dependencies": {
     "@huggingface/transformers": "^4.3.2"
@@ -19,7 +28,46 @@
   "devDependencies": {
     "@types/node": "^26.6.6",
     "electron": "^45.3.4",
+    "electron-builder": "^26.18.0",
     "ts-node": "^10.9.2",
     "typescript": "^7.0.2"
+  },
+  "build": {
+    "appId": "cl.aucode.lights",
+    "productName": "ClauCode Lights",
+    "copyright": "ClauCode Lights",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "frontend/dist/**/*",
+      "config.json",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "ClauCode-Lights-${version}-${arch}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ClauCode Lights"
+    }
   }
 }
