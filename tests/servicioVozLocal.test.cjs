@@ -119,6 +119,22 @@ async function probarCacheYModoOffline(tono) {
     const estadosCompletos = archivos.map((file) => ({ file, cached: true }));
     assert.equal(await archivosCacheVozLegibles(temporal, estadosCompletos), true);
     assert.equal(await archivosCacheVozLegibles(path.join(temporal, 'inexistente'), estadosCompletos), false);
+    if (process.platform === 'win32') {
+      const unidadAlterna = temporal.replace(/^([A-Za-z]):/, (_ruta, letra) => `${letra === letra.toUpperCase() ? letra.toLowerCase() : letra.toUpperCase()}:`);
+      assert.notEqual(unidadAlterna, temporal, 'La prueba debe cambiar la letra de unidad');
+      assert.equal(await archivosCacheVozLegibles(unidadAlterna, estadosCompletos), true, 'C: y c: representan la misma caché');
+    }
+    assert.equal(await archivosCacheVozLegibles(temporal, [{ file: '../fuera.json', cached: true }]), false, 'No se acepta una ruta relativa que escape del modelo');
+    const realpathOriginal = fs.realpath;
+    fs.realpath = async function (ruta, ...args) {
+      if (ruta === path.join(modelo, 'tokenizer_config.json')) return path.join(temporal, 'fuera-del-modelo.json');
+      return realpathOriginal.call(this, ruta, ...args);
+    };
+    try {
+      assert.equal(await archivosCacheVozLegibles(temporal, estadosCompletos), false, 'Una ruta real fuera del modelo no es caché válida');
+    } finally {
+      fs.realpath = realpathOriginal;
+    }
 
     const onnx = archivos.find((archivo) => archivo.endsWith('.onnx'));
     const rutaOnnx = path.join(modelo, ...onnx.split('/'));

@@ -418,6 +418,13 @@ export class TraductorLuces {
   }
 
   private static dividirEnClausulas(textoOriginal: string): readonly string[] {
+    // Whisper puede separar órdenes independientes con punto seguido de espacio.
+    // Un punto decimal no tiene espacio después y los puntos dobles permanecen inválidos.
+    const segmentosFrase = textoOriginal.split(/(?<!\.)\.(?=\s+\S)/).map((s) => s.trim());
+    if (segmentosFrase.length > 1) {
+      if (segmentosFrase.some((s) => s.length === 0)) return [];
+      return segmentosFrase.flatMap((segmento) => TraductorLuces.dividirEnClausulas(segmento));
+    }
     if (textoOriginal.includes(',')) {
       const segmentosComa = textoOriginal.split(',').map((s) => s.trim());
       if (segmentosComa.some((s) => s.length === 0)) {

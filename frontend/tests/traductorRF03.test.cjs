@@ -436,6 +436,22 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
     assert.equal(resultado.exito, false, orden);
     assert.equal(resultado.comandosPayload.length, 0, orden);
   }
+  const frases = [
+    ['frontales en azul. contras en rojo.', ['Group 1 At Preset 4.7', 'Group 2 At Preset 4.2']],
+    ['frontales al 50%. siguiente escena.', ['Group 1 At 50', 'Go Executor 1']],
+    ['ir a escena 2.5. frontales en azul.', ['Goto Cue 2.5 Executor 1', 'Group 1 At Preset 4.7']],
+    ['ir a escena 3.25. frontales al 33.5%.', ['Goto Cue 3.25 Executor 1', 'Group 1 At 33.5']],
+  ];
+  for (const [orden, sintaxis] of frases) {
+    const resultado = TraductorLuces.interpretarOrden(orden);
+    assert.equal(resultado.exito, true, orden);
+    assert.deepEqual(resultado.sintaxisListaMA2, sintaxis, orden);
+  }
+  for (const orden of ['frontales al 50.. siguiente escena.', 'ir a escena 2.5.3. frontales en azul.', 'frontales en azul.; contras en rojo.', 'frontales en azul.\r contras en rojo.', 'frontales en azul.\n contras en rojo.', 'frontales en azul.| contras en rojo.']) {
+    const resultado = TraductorLuces.interpretarOrden(orden);
+    assert.equal(resultado.exito, false, orden);
+    assert.equal(resultado.comandosPayload.length, 0, orden);
+  }
   console.log('  ✓ 9. Puntuación final Whisper, decimales y seguridad: correcto');
 }
 

@@ -48,11 +48,17 @@ function estaDentroDe(directorio: string, candidato: string): boolean {
   return relativo.length > 0 && relativo !== '..' && !relativo.startsWith(`..${path.sep}`) && !path.isAbsolute(relativo);
 }
 
+function rutasRaizEquivalentes(rutaA: string, rutaB: string): boolean {
+  if (process.platform !== 'win32') return rutaA === rutaB;
+  return rutaA.replace(/^[A-Z]:/, (unidad) => unidad.toLowerCase())
+    === rutaB.replace(/^[A-Z]:/, (unidad) => unidad.toLowerCase());
+}
+
 /** Rechaza enlaces simbólicos en la raíz y en cada componente del modelo. */
 async function rutaModeloSegura(rutaCacheModelos: string): Promise<string | null> {
   const raiz = path.resolve(rutaCacheModelos);
   try {
-    if ((await fs.lstat(raiz)).isSymbolicLink() || (await fs.realpath(raiz)) !== raiz) {
+    if ((await fs.lstat(raiz)).isSymbolicLink() || !rutasRaizEquivalentes(await fs.realpath(raiz), raiz)) {
       throw new Error('La ruta raíz de la caché de voz contiene un enlace simbólico.');
     }
     let actual = raiz;

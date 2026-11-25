@@ -89,3 +89,38 @@ La version desempaquetada se inicio con su ejecutable durante 8 segundos y perma
 - No se probo Whisper con voz real ni con una primera descarga completa desde el instalador.
 - No se accedio a hardware grandMA2 ni se confirmo una respuesta fisica.
 - No se conecto a una consola grandMA2 operativa.
+
+## Nueva verificación técnica — 2026-11-25
+
+Esta sección registra la corrida actual. Los 232763774 bytes y el aviso de autor descritos arriba corresponden al instalador histórico del 22-11-2026 y no al generado aquí. No se instaló ni abrió el ejecutable nuevo.
+
+### Identidad y filtros
+
+Se comprobaron ambos `package.json`: la raíz conserva `name: agente-luces-ma2`, versión `1.0.0`, `appId: cl.aucode.lights`, `productName: ClauCode Lights` y `author: Equipo ClauCode Lights - ITACA Arte y Cultura`; el frontend conserva `name: claucode-lights-ui`, versión `0.1.0` y `private: true`. No se cambió la identidad que determina `app.getPath('userData')`. `build.files` incluye los recursos de aplicación y dependencias de producción, y excluye explícitamente `onnxruntime-node/bin/napi-v6/{darwin,linux,win32/arm64}`. `build.asarUnpack` conserva el módulo ONNX y excluye esas mismas plataformas. La inspección posterior del ASAR comprueba que la exclusión se aplicó al paquete, no solo al desempaquetado.
+
+`npm.cmd run dist:win` finalizó con código 0. La salida observada de electron-builder 26.18.0 no contiene el aviso de `author`. Sí informa que usa el icono predeterminado y que omite la firma porque no hay certificado configurado.
+
+### Instalador de esta corrida
+
+| Dato | Resultado |
+| --- | --- |
+| Ruta | `C:\Users\milen\Documents\agente-luces-ma2\release\ClauCode-Lights-1.0.0-x64.exe` |
+| Tamaño exacto | **173818230 bytes** |
+| Conversión | **165.765982 MiB**, con 1 MiB = 1048576 bytes |
+| Referencia proporcionada por el equipo | **221.98 MiB** del instalador anterior |
+| Reducción frente a esa referencia | **56.214018 MiB; 25.3239 %** |
+| SHA-256 | `5CF1B85F1DACD6831D19D3A2D67C99C39A533C3C826911323A4495C3C5878120` |
+
+### Inspección de `app.asar` y `app.asar.unpacked`
+
+`app.asar` contiene las entradas `dist/main.js`, `dist/preload.js`, `frontend/dist/index.html`, `config.json` y `node_modules/@huggingface/transformers/package.json`. El índice de `node_modules/onnxruntime-node/bin/napi-v6` enumera únicamente `win32/x64` y los cinco archivos siguientes; sus archivos físicos existen en `release/win-unpacked/resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/win32/x64`.
+
+| Binario Windows x64 | Bytes desempaquetados |
+| --- | ---: |
+| `DirectML.dll` | 18527584 |
+| `dxcompiler.dll` | 17986360 |
+| `dxil.dll` | 1508664 |
+| `onnxruntime.dll` | 28754232 |
+| `onnxruntime_binding.node` | 298848 |
+
+No hay entradas Darwin, Linux ni `win32/arm64` en el índice ASAR ni archivos de esas plataformas en el directorio ONNX desempaquetado. `@img/sharp-win32-x64` permanece en el paquete. La distribución observada coincide con los filtros esperados. Esta inspección no prueba el arranque del instalador nuevo ni una inferencia Whisper real desde él; ambas requieren validación manual.
