@@ -162,6 +162,96 @@ async function probarCacheYModoOffline(tono) {
       allowRemoteModels: true, useFSCache: false,
     }, 'El entorno global se restaura');
 
+    const rutaPreprocesador = path.join(modelo, 'preprocessor_config.json');
+    const rutaTemporalVieja = `${rutaOnnx}.tmp.residual`;
+    const rutaTemporalActiva = `${rutaOnnx}.tmp.activa`;
+    await fs.writeFile(rutaTemporalVieja, 'residuo');
+    await fs.utimes(rutaTemporalVieja, new Date(0), new Date(0));
+    await fs.writeFile(rutaTemporalActiva, 'descarga en curso');
+
+    for (const contenidoCorrupto of ['{', Buffer.alloc(339)]) {
+      await fs.writeFile(rutaPreprocesador, contenidoCorrupto);
+      let intentos = 0;
+      const simulado = crearTransformersSimulado(estadoCompleto, true);
+      simulado.pipeline = async (_tarea, _modelo, opciones) => {
+        intentos += 1;
+        assert.equal(simulado.env.allowRemoteModels, true);
+        assert.equal(opciones.local_files_only, false);
+        assert.equal(await fs.stat(rutaPreprocesador).then(() => true, () => false), false);
+        await fs.writeFile(rutaPreprocesador, '{}');
+        return async () => ({ text: 'Frontales al 50%' });
+      };
+      const progresoReparacion = [];
+      await conTransformersSimulado(simulado, async () => {
+        const resultado = await new ServicioVozLocal(temporal, null, (mensaje) => progresoReparacion.push(mensaje)).transcribirAudioPCM(tono);
+        assert.equal(resultado.exito, true);
+      });
+      assert.equal(intentos, 1, 'JSON inválido inicia una sola descarga simulada');
+      assert.ok(progresoReparacion.some((mensaje) => /Caché de voz dañada/.test(mensaje)));
+      assert.deepEqual(simulado.env, { cacheDir: 'cache-anterior', allowLocalModels: false, allowRemoteModels: true, useFSCache: false });
+    }
+    assert.equal(await fs.stat(rutaTemporalVieja).then(() => true, () => false), false, 'Temporal viejo retirado');
+    assert.equal(await fs.readFile(rutaTemporalActiva, 'utf8'), 'descarga en curso', 'Temporal reciente intacto');
+    assert.ok((await fs.readdir(path.dirname(rutaOnnx))).some((nombre) => nombre.startsWith(path.basename(rutaTemporalVieja) + '.corrupt.')));
+
+    const contenidoOnnxCorrupto = Buffer.from([8, 1, 99]);
+    await fs.writeFile(rutaOnnx, contenidoOnnxCorrupto);
+    let intentosOnnx = 0;
+    const simuladoOnnx = crearTransformersSimulado(estadoCompleto, false);
+    simuladoOnnx.pipeline = async (_tarea, _modelo, opciones) => {
+      intentosOnnx += 1;
+      if (intentosOnnx === 1) {
+        assert.equal(opciones.local_files_only, true);
+        throw new Error(`Protobuf parsing failed: ${path.basename(rutaOnnx)}`);
+      }
+      assert.equal(simuladoOnnx.env.allowRemoteModels, true);
+      assert.equal(opciones.local_files_only, false);
+      assert.equal(await fs.stat(rutaOnnx).then(() => true, () => false), false);
+      await fs.writeFile(rutaOnnx, Buffer.from([8, 1]));
+      return async () => ({ text: 'Frontales al 50%' });
+    };
+    await conTransformersSimulado(simuladoOnnx, async () => {
+      assert.equal((await new ServicioVozLocal(temporal).transcribirAudioPCM(tono)).exito, true);
+    });
+    assert.equal(intentosOnnx, 2, 'ONNX no vacío permite solo un reintento remoto');
+    assert.ok((await fs.readdir(path.dirname(rutaOnnx))).some((nombre) => nombre.startsWith(path.basename(rutaOnnx) + '.corrupt.')));
+    assert.deepEqual(simuladoOnnx.env, { cacheDir: 'cache-anterior', allowLocalModels: false, allowRemoteModels: true, useFSCache: false });
+
+    let cargasConcurrentes = 0;
+    const simuladoConcurrente = crearTransformersSimulado(estadoCompleto, false);
+    simuladoConcurrente.pipeline = async (_tarea, _modelo, opciones) => {
+      cargasConcurrentes += 1;
+      if (cargasConcurrentes === 1) {
+        assert.equal(opciones.local_files_only, true);
+        return async () => { throw new Error(`Protobuf parsing failed: ${path.basename(rutaOnnx)}`); };
+      }
+      assert.equal(opciones.local_files_only, false);
+      await fs.writeFile(rutaOnnx, Buffer.from([8, 1]));
+      return async () => ({ text: 'Frontales al 50%' });
+    };
+    await conTransformersSimulado(simuladoConcurrente, async () => {
+      const servicio = new ServicioVozLocal(temporal);
+      const resultados = await Promise.all([servicio.transcribirAudioPCM(tono), servicio.transcribirAudioPCM(tono)]);
+      assert.ok(resultados.every((resultado) => resultado.exito));
+    });
+    assert.equal(cargasConcurrentes, 2, 'Dos transcripciones comparten una sola recuperación');
+
+    let intentosFallidos = 0;
+    const simuladoSinInternet = crearTransformersSimulado(estadoCompleto, false);
+    simuladoSinInternet.pipeline = async () => {
+      intentosFallidos += 1;
+      if (intentosFallidos === 1) throw new Error(`Protobuf parsing failed: ${path.basename(rutaOnnx)}`);
+      throw new Error('ENOTFOUND huggingface.co');
+    };
+    await conTransformersSimulado(simuladoSinInternet, async () => {
+      const resultado = await new ServicioVozLocal(temporal).transcribirAudioPCM(tono);
+      assert.equal(resultado.exito, false);
+      assert.match(resultado.mensaje, /Conéctate a internet/i);
+    });
+    assert.equal(intentosFallidos, 2, 'Fallo de recuperación no provoca bucle');
+    assert.deepEqual(simuladoSinInternet.env, { cacheDir: 'cache-anterior', allowLocalModels: false, allowRemoteModels: true, useFSCache: false });
+    await fs.writeFile(rutaOnnx, Buffer.from([8, 1]));
+
     await fs.unlink(rutaOnnx);
     const incompleto = crearTransformersSimulado(estadoCompleto, true);
     await conTransformersSimulado(incompleto, async () => {
@@ -176,6 +266,14 @@ async function probarCacheYModoOffline(tono) {
       assert.equal(resultado.exito, true, 'Permite primera descarga sin caché');
     });
     assert.equal(inexistente.llamadas.registro, 0, 'Sin metadatos no se consulta el registro');
+
+    const cacheVacia = path.join(temporal, 'cache-vacia');
+    await fs.mkdir(cacheVacia);
+    const vacia = crearTransformersSimulado(estadoCompleto, true);
+    await conTransformersSimulado(vacia, async () => {
+      assert.equal((await new ServicioVozLocal(cacheVacia).transcribirAudioPCM(tono)).exito, true);
+    });
+    assert.equal(vacia.llamadas.pipeline, 1, 'Una raíz vacía permite la primera descarga');
 
     const sinRed = crearTransformersSimulado({ allCached: false, files: estadosCompletos }, false, true);
     sinRed.env.allowRemoteModels = false;

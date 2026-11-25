@@ -117,9 +117,9 @@ El archivo real también necesita `executorPorDefecto`, `grupos`, `colores` e `i
 
 ## Whisper y funcionamiento sin internet
 
-`src/main.ts` crea `ServicioVozLocal` con la caché **`app.getPath('userData')/cache-modelos-voz`**. El modelo utilizado es `Xenova/whisper-tiny`. La primera transcripción descarga los recursos faltantes si hay internet; después pueden cargarse desde el almacenamiento local. El mensaje de progreso «Cargando recurso del modelo» se usa tanto al leer caché como durante la descarga: no distingue ambos casos por sí solo.
+`src/main.ts` crea `ServicioVozLocal` con la caché **`app.getPath('userData')/cache-modelos-voz`**. El modelo utilizado es `Xenova/whisper-tiny`. La primera transcripción descarga los recursos faltantes si hay internet; después pueden cargarse desde el almacenamiento local. El servicio distingue la carga local con «Cargando modelo local desde caché (Whisper Tiny español)...» del progreso de descarga remota. Si detecta JSON u ONNX dañados, aparta únicamente los archivos afectados y realiza un reintento de descarga. Esta recuperación requiere internet cuando hace falta descargar de nuevo los recursos.
 
-Las pruebas automáticas verifican la ruta de procesamiento con un transcriptor inyectado. Un diagnóstico histórico del 20-11-2026 ejecutó el modelo real desde una caché local existente sin acceso remoto, pero usó un tono sintético, no voz hablada. **La primera descarga en un perfil limpio y la operación integral offline en Electron siguen pendientes de validación manual.**
+Las pruebas automáticas usan archivos temporales y transcriptores simulados para verificar caché, recuperación y funcionamiento offline sin descargar modelos. Un diagnóstico histórico del 20-11-2026 ejecutó el modelo real desde una caché local existente sin acceso remoto, pero usó un tono sintético. El registro de Hito 4 conserva los fallos observados en la primera descarga H4-03/H4-03b y la prueba manual de voz offline H4-06. La descarga limpia con la nueva recuperación y la operación integral con grandMA2 siguen pendientes de validación manual.
 
 ## Manual rápido de operador de cabina
 

@@ -29,6 +29,14 @@ const METADATOS_BASE_WHISPER = [
   { file: 'tokenizer_config.json', cached: true },
   { file: 'preprocessor_config.json', cached: true },
 ] as const;
+const ANTIGUEDAD_TEMPORAL_MS = 24 * 60 * 60 * 1000;
+const ERROR_CACHE_DANADA = /Protobuf parsing failed|Unexpected token|not valid JSON|JSON.parse|parse.*ONNX|ONNX.*pars|invalid.*model|Failed to load model/i;
+
+class ErrorRecuperacionVoz extends Error {
+  constructor(causa: unknown) {
+    super('La caché de voz dañada no se pudo reparar. Conéctate a internet y vuelve a intentar la transcripción.', { cause: causa });
+  }
+}
 
 interface EstadoArchivoCache {
   readonly file: string;
@@ -40,6 +48,72 @@ function estaDentroDe(directorio: string, candidato: string): boolean {
   return relativo.length > 0 && relativo !== '..' && !relativo.startsWith(`..${path.sep}`) && !path.isAbsolute(relativo);
 }
 
+/** Rechaza enlaces simbólicos en la raíz y en cada componente del modelo. */
+async function rutaModeloSegura(rutaCacheModelos: string): Promise<string | null> {
+  const raiz = path.resolve(rutaCacheModelos);
+  try {
+    if ((await fs.lstat(raiz)).isSymbolicLink() || (await fs.realpath(raiz)) !== raiz) {
+      throw new Error('La ruta raíz de la caché de voz contiene un enlace simbólico.');
+    }
+    let actual = raiz;
+    for (const parte of MODELO_ASR_POR_DEFECTO.split('/')) {
+      actual = path.join(actual, parte);
+      const estado = await fs.lstat(actual);
+      if (!estado.isDirectory() || estado.isSymbolicLink() || !estaDentroDe(raiz, await fs.realpath(actual))) {
+        throw new Error('La ruta del modelo de voz contiene un enlace simbólico o un archivo inesperado.');
+      }
+    }
+    return actual;
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function listarArchivosModelo(rutaModelo: string): Promise<string[]> {
+  const encontrados: string[] = [];
+  async function recorrer(directorio: string): Promise<void> {
+    for (const entrada of await fs.readdir(directorio, { withFileTypes: true })) {
+      if (entrada.isSymbolicLink()) continue;
+      const ruta = path.join(directorio, entrada.name);
+      if (!estaDentroDe(rutaModelo, ruta)) continue;
+      if (entrada.isDirectory()) await recorrer(ruta);
+      else if (entrada.isFile()) encontrados.push(ruta);
+    }
+  }
+  await recorrer(rutaModelo);
+  return encontrados;
+}
+
+async function cuarentenarArchivo(rutaModelo: string, rutaArchivo: string): Promise<boolean> {
+  if (!estaDentroDe(rutaModelo, rutaArchivo)) return false;
+  const estado = await fs.lstat(rutaArchivo);
+  if (!estado.isFile() || estado.isSymbolicLink() || !estaDentroDe(rutaModelo, await fs.realpath(rutaArchivo))) return false;
+  const destino = `${rutaArchivo}.corrupt.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  await fs.rename(rutaArchivo, destino);
+  return true;
+}
+
+/** Inspecciona solo el modelo activo; deja las descargas recientes intactas. */
+async function inspeccionarCacheDanada(rutaModelo: string): Promise<string[]> {
+  const danados: string[] = [];
+  for (const ruta of await listarArchivosModelo(rutaModelo)) {
+    if (/\.tmp\.[^\\/]+$/.test(ruta) && !/\.corrupt\./.test(path.basename(ruta))) {
+      if (Date.now() - (await fs.stat(ruta)).mtimeMs > ANTIGUEDAD_TEMPORAL_MS) {
+        await cuarentenarArchivo(rutaModelo, ruta);
+      }
+    } else if (ruta.endsWith('.json')) {
+      const contenido = await fs.readFile(ruta, 'utf8');
+      try {
+        JSON.parse(contenido);
+      } catch {
+        danados.push(ruta);
+      }
+    }
+  }
+  return danados;
+}
+
 /** Comprueba los archivos que la versión instalada de Transformers declara necesarios. */
 export async function archivosCacheVozLegibles(
   rutaCacheModelos: string,
@@ -48,10 +122,8 @@ export async function archivosCacheVozLegibles(
   if (archivos.length === 0 || archivos.some((archivo) => !archivo.cached)) return false;
 
   try {
-    const raizCache = await fs.realpath(rutaCacheModelos);
-    const rutaModelo = path.resolve(raizCache, ...MODELO_ASR_POR_DEFECTO.split('/'));
-    const raizModelo = await fs.realpath(rutaModelo);
-    if (!estaDentroDe(raizCache, raizModelo)) return false;
+    const raizModelo = await rutaModeloSegura(rutaCacheModelos);
+    if (raizModelo === null) return false;
 
     for (const archivo of archivos) {
       const partes = archivo.file.split('/');
@@ -193,6 +265,7 @@ export class ServicioVozLocal implements IServicioVozLocal {
   private readonly transcriptorInyectado: FuncionTranscriptorASR | null;
   private readonly observadorProgreso: ObservadorProgresoVoz | null;
   private promesaTranscriptor: Promise<FuncionTranscriptorASR> | null = null;
+  private promesaRecuperacion: Promise<FuncionTranscriptorASR> | null = null;
 
   constructor(
     rutaCacheModelos: string,
@@ -235,11 +308,31 @@ export class ServicioVozLocal implements IServicioVozLocal {
     const muestrasNormalizadas = normalizarAudioPCM(muestras);
 
     try {
-      const transcriptor = await this.obtenerTranscriptor();
-      const resultado = await transcriptor(muestrasNormalizadas, {
-        language: 'spanish',
-        task: 'transcribe',
-      });
+      let transcriptor = await this.obtenerTranscriptor();
+      let resultado: Awaited<ReturnType<FuncionTranscriptorASR>>;
+      try {
+        resultado = await transcriptor(muestrasNormalizadas, { language: 'spanish', task: 'transcribe' });
+      } catch (error: unknown) {
+        if (this.transcriptorInyectado !== null || !ERROR_CACHE_DANADA.test(String(error))) throw error;
+        const vigente = await this.promesaTranscriptor?.catch(() => null);
+        if (vigente !== undefined && vigente !== null && vigente !== transcriptor) {
+          transcriptor = vigente;
+        } else {
+          if (this.promesaRecuperacion === null) this.promesaRecuperacion = this.cargarPipelineWhisper(error);
+          const recuperacion = this.promesaRecuperacion;
+          try {
+            transcriptor = await recuperacion;
+            this.promesaTranscriptor = Promise.resolve(transcriptor);
+          } finally {
+            if (this.promesaRecuperacion === recuperacion) this.promesaRecuperacion = null;
+          }
+        }
+        try {
+          resultado = await transcriptor(muestrasNormalizadas, { language: 'spanish', task: 'transcribe' });
+        } catch (errorReintento: unknown) {
+          throw new ErrorRecuperacionVoz(errorReintento);
+        }
+      }
 
       const textoBruto =
         typeof resultado === 'string' ? resultado : typeof resultado?.text === 'string' ? resultado.text : '';
@@ -294,7 +387,7 @@ export class ServicioVozLocal implements IServicioVozLocal {
     return this.promesaTranscriptor;
   }
 
-  private async cargarPipelineWhisper(): Promise<FuncionTranscriptorASR> {
+  private async cargarPipelineWhisper(errorCacheInicial?: unknown): Promise<FuncionTranscriptorASR> {
     // env es global en Transformers: serializar inicializaciones y restaurar sus valores.
     const cargaAnterior = ServicioVozLocal.colaCargaModelo;
     let liberarTurno = () => {};
@@ -303,13 +396,13 @@ export class ServicioVozLocal implements IServicioVozLocal {
     });
     await cargaAnterior;
     try {
-      return await this.crearPipelineWhisper();
+      return await this.crearPipelineWhisper(errorCacheInicial);
     } finally {
       liberarTurno();
     }
   }
 
-  private async crearPipelineWhisper(): Promise<FuncionTranscriptorASR> {
+  private async crearPipelineWhisper(errorCacheInicial?: unknown): Promise<FuncionTranscriptorASR> {
     const modulo = await import('@huggingface/transformers');
     const entornoAnterior = {
       cacheDir: modulo.env.cacheDir,
@@ -323,6 +416,17 @@ export class ServicioVozLocal implements IServicioVozLocal {
     // La inspección del registro también consulta metadatos; prohibir red durante ella.
     modulo.env.allowRemoteModels = false;
     try {
+      const rutaModelo = await rutaModeloSegura(this.rutaCacheModelos);
+      let reparacionIntentada = errorCacheInicial !== undefined;
+      if (rutaModelo !== null) {
+        const jsonDanados = await inspeccionarCacheDanada(rutaModelo);
+        if (jsonDanados.length > 0 || errorCacheInicial !== undefined) {
+          this.notificarProgreso('Caché de voz dañada detectada; reparando y descargando modelo...');
+          for (const archivo of jsonDanados) await cuarentenarArchivo(rutaModelo, archivo);
+          if (errorCacheInicial !== undefined) await this.cuarentenarOnnxDanado(rutaModelo, errorCacheInicial);
+          reparacionIntentada = true;
+        }
+      }
       let cacheCompleta = false;
       try {
         if (await archivosCacheVozLegibles(this.rutaCacheModelos, METADATOS_BASE_WHISPER)) {
@@ -338,7 +442,7 @@ export class ServicioVozLocal implements IServicioVozLocal {
         console.warn(`[ServicioVozLocal] No se pudo verificar toda la caché local: ${detalle}`);
       }
 
-      modulo.env.allowRemoteModels = cacheCompleta ? false : entornoAnterior.allowRemoteModels;
+      modulo.env.allowRemoteModels = reparacionIntentada ? true : cacheCompleta ? false : entornoAnterior.allowRemoteModels;
       if (cacheCompleta) {
         this.notificarProgreso('Cargando modelo local desde caché (Whisper Tiny español)...');
       } else if (modulo.env.allowRemoteModels) {
@@ -348,12 +452,12 @@ export class ServicioVozLocal implements IServicioVozLocal {
       }
 
       let ultimoPorcentajeReportado = -1;
-      const asr = await modulo.pipeline(TAREA_ASR, MODELO_ASR_POR_DEFECTO, {
+      const opcionesPipeline = (soloLocal: boolean) => ({
         dtype: DTYPE_ASR,
         cache_dir: this.rutaCacheModelos,
-        local_files_only: cacheCompleta || !entornoAnterior.allowRemoteModels,
-        progress_callback: (info) => {
-          if (info.status === 'progress') {
+        local_files_only: soloLocal,
+        progress_callback: (info: { status: string; progress?: number; file?: string }) => {
+          if (info.status === 'progress' && typeof info.progress === 'number') {
             const porcentaje = Math.round(info.progress);
             if (porcentaje >= ultimoPorcentajeReportado + 15 || porcentaje === 100) {
               ultimoPorcentajeReportado = porcentaje;
@@ -363,7 +467,26 @@ export class ServicioVozLocal implements IServicioVozLocal {
             this.notificarProgreso('Modelo de voz local listo y en caché.');
           }
         },
-      });
+      } as const);
+      let asr: Awaited<ReturnType<typeof modulo.pipeline>>;
+      try {
+        asr = await modulo.pipeline(TAREA_ASR, MODELO_ASR_POR_DEFECTO, opcionesPipeline(!reparacionIntentada && (cacheCompleta || !entornoAnterior.allowRemoteModels)));
+      } catch (error: unknown) {
+        if (reparacionIntentada || !ERROR_CACHE_DANADA.test(String(error)) || rutaModelo === null) {
+          if (reparacionIntentada) throw new ErrorRecuperacionVoz(error);
+          throw error;
+        }
+        this.notificarProgreso('Caché de voz dañada detectada; reparando y descargando modelo...');
+        const jsonDanados = await inspeccionarCacheDanada(rutaModelo);
+        for (const archivo of jsonDanados) await cuarentenarArchivo(rutaModelo, archivo);
+        if (jsonDanados.length === 0) await this.cuarentenarOnnxDanado(rutaModelo, error);
+        modulo.env.allowRemoteModels = true;
+        try {
+          asr = await modulo.pipeline(TAREA_ASR, MODELO_ASR_POR_DEFECTO, opcionesPipeline(false));
+        } catch (errorReintento: unknown) {
+          throw new ErrorRecuperacionVoz(errorReintento);
+        }
+      }
 
       return async (audioPCM16k, opciones) => {
         const salida = await asr(audioPCM16k, {
@@ -380,6 +503,26 @@ export class ServicioVozLocal implements IServicioVozLocal {
       modulo.env.allowLocalModels = entornoAnterior.allowLocalModels;
       modulo.env.allowRemoteModels = entornoAnterior.allowRemoteModels;
       modulo.env.useFSCache = entornoAnterior.useFSCache;
+    }
+  }
+
+  private async cuarentenarOnnxDanado(rutaModelo: string, error: unknown): Promise<void> {
+    const archivos = (await listarArchivosModelo(rutaModelo)).filter((ruta) => ruta.endsWith('.onnx'));
+    const detalle = String(error);
+    const mencionados = archivos.filter((ruta) => detalle.includes(path.basename(ruta)));
+    if (mencionados.length > 0) {
+      for (const ruta of mencionados) await cuarentenarArchivo(rutaModelo, ruta);
+      return;
+    }
+    if (!/Protobuf parsing failed|parse.*ONNX|ONNX.*pars|invalid.*model|Failed to load model/i.test(detalle)) return;
+    const runtime = await import('onnxruntime-node');
+    for (const ruta of archivos) {
+      try {
+        const sesion = await runtime.InferenceSession.create(ruta);
+        await sesion.release();
+      } catch {
+        await cuarentenarArchivo(rutaModelo, ruta);
+      }
     }
   }
 

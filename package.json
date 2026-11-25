@@ -2,6 +2,7 @@
   "name": "agente-luces-ma2",
   "version": "1.0.0",
   "description": "Aplicación Electron para controlar grandMA2 onPC mediante texto, voz local y Telnet",
+  "author": "Equipo ClauCode Lights - ITACA Arte y Cultura",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
@@ -44,11 +45,17 @@
       "frontend/dist/**/*",
       "config.json",
       "package.json",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/linux/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**/*"
     ],
     "asar": true,
     "asarUnpack": [
-      "node_modules/onnxruntime-node/**/*"
+      "node_modules/onnxruntime-node/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/linux/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**/*"
     ],
     "win": {
       "target": [

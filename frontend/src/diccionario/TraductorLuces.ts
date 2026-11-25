@@ -187,7 +187,7 @@ const PALABRAS_CUE_SIGUIENTE = ['siguiente', 'proxima', 'proximo', 'avanzar', 'a
 const PALABRAS_CUE_ANTERIOR = ['anterior', 'previa', 'previo', 'volver', 'vuelve', 'retroceder', 'retrocede', 'atras', 'goback'] as const;
 const PALABRAS_CUE_DETENER = ['detener', 'deten', 'parar', 'para', 'apagar', 'apaga', 'off', 'stop'] as const;
 
-const CARACTERES_INYECCION = /[\r\n;\x00-\x1f]/;
+const CARACTERES_INYECCION = /[\r\n;|\x00-\x1f]/;
 
 const PLANTILLAS_AUTOCOMPLETADO: readonly string[] = [
   'Frontales al 50%',
@@ -284,7 +284,8 @@ export class TraductorLuces {
       .toLowerCase()
       .replace(/[^a-z0-9.%+\-\s]/g, ' ')
       .replace(/\s+/g, ' ')
-      .trim();
+      .trim()
+      .replace(/\.$/, '');
   }
 
   /**

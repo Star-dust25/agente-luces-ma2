@@ -415,4 +415,28 @@ console.log('Iniciando batería de pruebas automatizadas RF-03:');
   console.log('  ✓ 8. Control de Cues (RF-07) y catálogo dinámico config.json: correcto');
 }
 
+// La puntuación final de Whisper no altera decimales ni evita el filtro de seguridad.
+{
+  const casos = [
+    ['frontales en azul.', 'Group 1 At Preset 4.7'],
+    ['frontales al 50.', 'Group 1 At 50'],
+    ['siguiente escena.', 'Go Executor 1'],
+    ['ir a escena 3.', 'Goto Cue 3 Executor 1'],
+    ['ir a escena 2.5.', 'Goto Cue 2.5 Executor 1'],
+    ['ir a escena 3.25.', 'Goto Cue 3.25 Executor 1'],
+    ['frontales al 33.5%.', 'Group 1 At 33.5'],
+  ];
+  for (const [orden, sintaxis] of casos) {
+    const resultado = TraductorLuces.interpretarOrden(orden);
+    assert.equal(resultado.exito, true, orden);
+    assert.equal(resultado.sintaxisMA2, sintaxis);
+  }
+  for (const orden of ['frontales al 150.', 'frontales al 50..', 'ir a escena 2.5.3.', 'frontales al 50.;Go', 'frontales al 50.\rGo', 'frontales al 50.\nGo', 'frontales al 50.|Go']) {
+    const resultado = TraductorLuces.interpretarOrden(orden);
+    assert.equal(resultado.exito, false, orden);
+    assert.equal(resultado.comandosPayload.length, 0, orden);
+  }
+  console.log('  ✓ 9. Puntuación final Whisper, decimales y seguridad: correcto');
+}
+
 console.log('\nTodos los casos de prueba de RF-03, RF-07 y catálogo dinámico pasaron exitosamente.');
